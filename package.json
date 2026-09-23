@@ -1,0 +1,37 @@
+{
+  "name": "voiced",
+  "version": "0.1.0",
+  "description": "Voiced: the phone layer for AI agents. Navigates IVR phone trees, pays bills, waits on hold, and hands live humans to the user.",
+  "scripts": {
+    "sim": "tsx scripts/sim.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p .",
+    "dev": "tsx src/server/index.ts",
+    "start": "tsx src/server/index.ts",
+    "mcp": "tsx src/mcp/stdio.ts",
+    "build:web": "tsx scripts/build-web.ts",
+    "eval": "tsx scripts/eval.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattgillen/voiced.git"
+  },
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/mattgillen/voiced/issues"
+  },
+  "homepage": "https://github.com/mattgillen/voiced#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "type": "module",
+  "private": true
+}
