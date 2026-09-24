@@ -18,7 +18,8 @@ import {
   sentences,
   wantsPound,
 } from '../core/parse.js';
-import type { Decision, Fact, MenuOption, Task } from '../core/types.js';
+import { STANDARD_FACTS } from '../core/tasks.js';
+import type { Decision, Fact, FailureReason, MenuOption, Task } from '../core/types.js';
 import type { Brain, BrainState } from './brain.js';
 
 const GLOBAL_HINTS: Record<string, number> = {
@@ -71,7 +72,24 @@ export function decideByRules(s: BrainState): Decision {
   if (fact) {
     const modality = inputModality(last) ?? inputModality(text) ?? 'speech';
     if ((s.entered[fact.key] ?? 0) >= 2) {
-      return ask(s, `${task.business} keeps rejecting your ${fact.label.toLowerCase()}`, `The phone tree asked for your ${fact.label.toLowerCase()} again after two tries. Want to take over, or check the value on file?`);
+      const refused = s.grants.some((g) => g.request.kind === 'input' && g.request.factKey === fact.key && !g.response.approved);
+      if (refused) return escalate('dead_end', `${task.business} keeps rejecting the ${fact.label.toLowerCase()} on file`, 'The value on file is being rejected. Getting a person to look.');
+      return {
+        action: {
+          type: 'ask_user',
+          request: {
+            kind: 'input',
+            title: `${task.business} didn't accept your ${fact.label.toLowerCase()}`,
+            detail: `It was rejected twice. Enter it again? ${fact.secret ? 'It goes straight to the vault.' : ''}`.trim(),
+            secret: fact.secret,
+            factKey: fact.key,
+            factLabel: fact.label,
+            aliases: fact.aliases,
+          },
+        },
+        reason: `The IVR rejected the ${fact.label.toLowerCase()} twice. Asking you to check it.`,
+        source: 'rules',
+      };
     }
     if (modality === 'dtmf') {
       const digits = fact.secret || /^\d+$/.test(fact.value ?? '') ? `{{${fact.key}}}` : undefined;
@@ -87,6 +105,9 @@ export function decideByRules(s: BrainState): Decision {
     const spoken = fact.spoken ?? fact.value ?? (fact.secret ? `{{${fact.key}}}` : undefined);
     if (spoken) return say(spoken, `Answering: ${fact.label.toLowerCase()}`, true);
   }
+
+  // The IVR wants something we don't have on file (often an identity check).
+  if (!fact && (analysis.kind === 'input' || (isVerification(last) && inputModality(last)))) return missingInfo(s, last);
 
   // Open question ("How can I help?"), possibly with suggested phrases.
   if (asksOpenQuestion(text)) {
@@ -118,14 +139,54 @@ export function decideByRules(s: BrainState): Decision {
   }
 
   if (s.counters.silences >= 2) {
-    if (task.kind === 'reach_human' || s.counters.silences >= 3) return askForHuman(s);
-    return {
-      action: { type: 'press', digits: '0' },
-      reason: 'Stuck on this prompt. Trying 0 for an operator.',
-      source: 'rules',
-    };
+    if (task.kind === 'reach_human' && s.counters.escalations < 4) return askForHuman(s);
+    return escalate('dead_end', `Nothing on "${analysis.title}" leads to the goal`, 'No option fits. Getting a person to look.');
   }
   return wait('Listening for the rest of the prompt');
+}
+
+const VERIFY = /\b(?:verify|verification|for your security|social security|date of birth|last four|passcode|security question|maiden name)\b/i;
+
+function isVerification(text: string): boolean {
+  return VERIFY.test(text);
+}
+
+/** Ask the user for information the task doesn't have; if they can't give it, escalate. */
+function missingInfo(s: BrainState, prompt: string): Decision {
+  const t = normalize(prompt);
+  const std = Object.entries(STANDARD_FACTS).find(([, f]) => f.aliases.some((a) => t.includes(a)));
+  const phrase = s.analysis.title.replace(/^Enter\s+/i, '').toLowerCase();
+  const key = std?.[0] ?? `asked.${phrase.replace(/[^a-z0-9]+/g, '_').slice(0, 32)}`;
+  const label = std?.[1].label ?? phrase;
+  const verification = isVerification(prompt);
+  const refused = s.grants.some((g) => g.request.kind === 'input' && g.request.factKey === key && !g.response.approved);
+  if (refused) {
+    return escalate(
+      verification ? 'identity_check' : 'dead_end',
+      `${s.task.business} asks for ${label.toLowerCase()}, and it isn't on file`,
+      'You couldn’t provide it. Getting a person to look.',
+    );
+  }
+  return {
+    action: {
+      type: 'ask_user',
+      request: {
+        kind: 'input',
+        title: `${s.task.business} is asking for your ${label.toLowerCase()}`,
+        detail: `“${prompt}” It isn’t on file. ${verification || std?.[1].secret ? 'It goes straight to the vault; the model never sees it.' : ''}`.trim(),
+        secret: std?.[1].secret ?? verification,
+        factKey: key,
+        factLabel: label,
+        aliases: std?.[1].aliases ?? [phrase],
+      },
+    },
+    reason: verification ? 'Identity check I can’t answer from what’s on file. Asking you.' : 'The IVR wants something that isn’t on file. Asking you.',
+    source: 'rules',
+  };
+}
+
+function escalate(reason: FailureReason, detail: string, why: string): Decision {
+  return { action: { type: 'escalate', reason, detail }, reason: why, source: 'rules' };
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +351,7 @@ function yesNo(s: BrainState, text: string): Decision {
 function askForHuman(s: BrainState): Decision {
   const n = s.counters.escalations;
   s.counters.escalations += 1;
+  if (n >= HUMAN_ASKS.length + 1) return escalate('dead_end', 'The phone tree won’t transfer to a person', 'Can’t get past the deflection. Getting a person to look.');
   if (n >= HUMAN_ASKS.length && s.analysis.options.some((o) => o.key === '0')) {
     return { action: { type: 'press', digits: '0' }, reason: 'Pressing 0 for an operator', source: 'rules' };
   }

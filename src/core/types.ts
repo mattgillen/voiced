@@ -84,6 +84,8 @@ export interface Line {
   say(text: string): Promise<void>;
   /** Warm transfer: connect the user to the far end. */
   bridge(): Promise<void>;
+  /** Pause or resume call recording (PCI: nothing is recorded while card digits are keyed). */
+  setRecording?(on: boolean): Promise<void>;
   /** Relay a message from the bridged user (simulator only; real calls carry audio). */
   userSays?(text: string): Promise<void>;
   hangup(): Promise<void>;
@@ -107,7 +109,8 @@ export type UserRequest =
     }
   | { kind: 'approve'; title: string; detail: string }
   | { kind: 'choose'; title: string; detail: string; options: string[] }
-  | { kind: 'input'; title: string; detail: string; secret?: boolean; factKey?: string };
+  /** Ask the user for something the task doesn't have (e.g. an identity check). Stored in the vault if secret. */
+  | { kind: 'input'; title: string; detail: string; secret?: boolean; factKey?: string; factLabel?: string; aliases?: string[] };
 
 export interface UserResponse {
   approved: boolean;
@@ -123,9 +126,11 @@ export type Action =
   | { type: 'wait' }
   | { type: 'ask_user'; request: UserRequest }
   | { type: 'handoff'; briefing: string }
+  /** Stuck: hand the call and its context to a human operator. Never just fail. */
+  | { type: 'escalate'; reason: FailureReason; detail: string }
   | { type: 'hangup'; outcome: 'success' | 'failure'; summary: string };
 
-export type DecisionSource = 'map' | 'rules' | 'llm' | 'guard';
+export type DecisionSource = 'map' | 'rules' | 'llm' | 'guard' | 'operator';
 
 export interface Decision {
   action: Action;
@@ -168,17 +173,66 @@ export type CallStatus =
   | 'on_hold'
   | 'talking_to_human'
   | 'awaiting_user'
+  | 'with_operator'
   | 'handing_off'
   | 'user_connected'
   | 'ended';
 
+// ---------------------------------------------------------------------------
+// Outcomes: every call ends as exactly one of these, with a reason and a step.
+
+/** Top-line metric: share of calls with resolution "ai". */
+export type Resolution = 'ai' | 'human_assisted' | 'failed';
+
+export type FailureReason =
+  /** Nothing on the tree leads to the goal. */
+  | 'dead_end'
+  /** The tree keeps sending the call back to the same screen. */
+  | 'loop'
+  /** A verification step the agent can't pass on its own. */
+  | 'identity_check'
+  /** Closed, system down, or the queue refuses callers. */
+  | 'business_unavailable'
+  /** The far end hung up unexpectedly. */
+  | 'hung_up'
+  | 'user_declined'
+  | 'timeout'
+  /** A human operator couldn't fix it either. */
+  | 'unresolved';
+
+/** The billable, auditable thing the call achieved (pricing is per result, not per minute). */
+export type ResultKind = 'bill_paid' | 'membership_canceled' | 'reservation_booked' | 'human_reached';
+
+export interface ResultRecord {
+  kind: ResultKind;
+  confirmation?: string;
+  amount?: string;
+  /** The exact line on the call that proves it, with its call time. */
+  evidence?: { t: number; text: string };
+}
+
+export interface FailureRecord {
+  reason: FailureReason;
+  detail: string;
+  /** The screen or state where it broke. */
+  step: string;
+  t: number;
+}
+
 export interface CallResult {
   outcome: 'success' | 'failure';
+  resolution: Resolution;
+  /** Set when the goal was achieved. */
+  result?: ResultRecord;
+  /** Where and why it broke. Also kept when an operator rescued the call, so every exception becomes training data. */
+  failure?: FailureRecord;
   summary: string;
   notes: Record<string, string>;
   callMs: number;
   holdMs: number;
   userTouches: number;
+  escalations: number;
+  operatorTouches: number;
   turns: number;
   mapHits: number;
   llmCalls: number;
@@ -203,5 +257,8 @@ export type CallEvent =
   | { type: 'user_request'; t: number; id: string; request: UserRequest }
   | { type: 'user_response'; t: number; id: string; response: UserResponse }
   | { type: 'handoff'; t: number; briefing: string }
+  | { type: 'escalated'; t: number; ticketId: string; reason: FailureReason; detail: string; step: string }
+  | { type: 'operator'; t: number; ticketId: string; state: 'joined' | 'returned' | 'closed'; operator: string; note?: string }
+  | { type: 'recording'; t: number; paused: boolean; reason: string }
   | { type: 'bridge'; t: number; from: 'user' | 'human'; text: string }
   | { type: 'ended'; t: number; result: CallResult };

@@ -118,6 +118,7 @@ export const ironTemple: Scenario = {
   title: 'Cancel my gym membership',
   pain: ['No "cancel" option in any menu', 'Two retention offers', 'Phone-only cancellation'],
   featured: true,
+  expect: { resolution: 'ai' },
   script,
   task() {
     return {

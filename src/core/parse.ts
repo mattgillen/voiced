@@ -146,7 +146,7 @@ export function looksLikeGoodbye(text: string): boolean {
 }
 
 export function looksLikeInvalid(text: string): boolean {
-  return /\b(?:not a valid|invalid|didn'?t (?:get|hear|understand|catch)|not recognized|was not found|couldn'?t find|try again)\b/i.test(
+  return /\b(?:not a valid|invalid|didn'?t (?:get|hear|understand|catch)|not recognized|was not found|couldn'?t find|try again|option is (?:temporarily )?unavailable)\b/i.test(
     text,
   );
 }
@@ -229,9 +229,14 @@ export function lastSentence(text: string): string {
 function titleFor(kind: TurnKind, text: string, options: MenuOption[]): string {
   const last = lastSentence(text);
   switch (kind) {
-    case 'menu':
+    case 'menu': {
       if (options.some((o) => /english|español|espanol/i.test(o.label))) return 'Language menu';
-      return `Menu · ${options.length} options`;
+      const first = sentences(text).find((s) => !looksLikeInvalid(s) && !/^returning to\b/i.test(s))?.replace(/[.!]$/, '') ?? '';
+      const named = first.length < 44 && !/\b(?:press|say|enter)\b|^(?:thanks?|thank you|okay|welcome|hi)\b/i.test(first);
+      if (named) return `${first} menu`.replace(/ menu menu$/i, ' menu');
+      const labels = options.filter((o) => o.via === 'dtmf').map((o) => o.label);
+      return labels.length ? truncate(`Menu: ${labels.slice(0, 2).join(' · ')}${labels.length > 2 ? ' · …' : ''}`, 60) : `Menu · ${options.length} options`;
+    }
     case 'hold':
       return 'Hold queue';
     case 'human':

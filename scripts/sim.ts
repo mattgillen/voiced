@@ -5,10 +5,12 @@
 
 import { ClaudeBrain } from '../src/brains/claude.js';
 import { MapMemory } from '../src/core/memory.js';
+import { OperatorQueue } from '../src/core/operators.js';
+import { attachScriptedOperator } from '../src/sim/operator.js';
 import { formatDuration } from '../src/core/session.js';
 import type { CallEvent } from '../src/core/types.js';
 import { simulate } from '../src/sim/run.js';
-import { scenarios } from '../src/sim/scenarios/index.js';
+import { allScenarios, getScenario, scenarios } from '../src/sim/scenarios/index.js';
 
 const args = process.argv.slice(2);
 const which = args.find((a) => !a.startsWith('--')) ?? 'bedford';
@@ -17,19 +19,24 @@ const quiet = args.includes('--quiet');
 const useClaude = args.includes('--claude');
 const decline = args.includes('--decline');
 const memory = new MapMemory();
+const operators = new OperatorQueue();
+attachScriptedOperator(operators);
 
-const ids = which === 'all' ? scenarios.map((s) => s.id) : [which];
+const ids = which === 'all' ? scenarios.map((s) => s.id) : which === 'hard' ? allScenarios.filter((s) => s.hard).map((s) => s.id) : [which];
 const clock = (t: number) => formatDuration(t).padStart(7);
 
 for (const id of ids) {
   for (let run = 1; run <= (twice ? 2 : 1); run++) {
-    const { session, task } = simulate(id, { memory, brain: useClaude ? new ClaudeBrain() : undefined });
+    const { session, task } = simulate(id, { memory, operators, brain: useClaude ? new ClaudeBrain() : undefined });
+    const inputs = getScenario(id)?.userInputs ?? {};
     let replies = 0;
     console.log(`\n━━ ${task.title} · ${task.business} · run ${run} ━━`);
     session.subscribe((e: CallEvent) => {
       if (!quiet) print(e);
       if (e.type === 'user_request') {
-        setTimeout(() => session.respond(e.id, { approved: !decline, choice: e.request.kind === 'choose' ? e.request.options[0] : undefined }), 10);
+        const r = e.request;
+        const text = r.kind === 'input' ? inputs[r.factKey ?? ''] : undefined;
+        setTimeout(() => session.respond(e.id, { approved: r.kind === 'input' ? !!text : !decline, text, choice: r.kind === 'choose' ? r.options[0] : undefined }), 10);
       }
       // Play the user once they're bridged in: reply whenever the rep finishes a question.
       if (e.type === 'bridge' && e.from === 'human' && e.text.trim().endsWith('?')) {
@@ -40,7 +47,9 @@ for (const id of ids) {
     });
     const r = await session.run();
     console.log(
-      `→ ${r.outcome.toUpperCase()}: ${r.summary}\n  call ${formatDuration(r.callMs)} · hold ${formatDuration(r.holdMs)} · you tapped ${r.userTouches}× · map hits ${r.mapHits} · model calls ${r.llmCalls}`,
+      `→ ${r.resolution.toUpperCase()}: ${r.summary}\n  call ${formatDuration(r.callMs)} · hold ${formatDuration(r.holdMs)} · you tapped ${r.userTouches}× · operator ${r.operatorTouches}× · map hits ${r.mapHits} · model calls ${r.llmCalls}` +
+        (r.result ? `\n  result: ${r.result.kind}${r.result.amount ? ` ${r.result.amount}` : ''}${r.result.confirmation ? ` #${r.result.confirmation}` : ''} (evidence @${formatDuration(r.result.evidence?.t ?? 0)}: “${r.result.evidence?.text ?? ''}”)` : '') +
+        (r.failure ? `\n  broke at “${r.failure.step}”: ${r.failure.reason}: ${r.failure.detail}` : ''),
     );
   }
 }
@@ -60,6 +69,15 @@ function print(e: CallEvent) {
       break;
     case 'handoff':
       console.log(`${clock(e.t)}  ⇄ HANDOFF ${e.briefing}`);
+      break;
+    case 'escalated':
+      console.log(`${clock(e.t)}  ⚑ ESCALATED to operator queue (${e.reason} at “${e.step}”): ${e.detail}`);
+      break;
+    case 'operator':
+      console.log(`${clock(e.t)}  ☎ OPERATOR ${e.operator} ${e.state}${e.note ? `: ${e.note}` : ''}`);
+      break;
+    case 'recording':
+      console.log(`${clock(e.t)}  ● recording ${e.paused ? 'paused' : 'resumed'} (${e.reason})`);
       break;
     case 'bridge':
       console.log(`${clock(e.t)}  ${e.from === 'user' ? 'YOU  ' : 'REP  '} ${e.text}`);

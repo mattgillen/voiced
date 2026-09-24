@@ -19,6 +19,11 @@ export class Vault {
     this.secrets.set(key, value);
   }
 
+  /** Register a fact learned mid-call (e.g. an identity answer the user typed). */
+  addFact(fact: Fact) {
+    this.facts.set(fact.key, fact);
+  }
+
   /** Remove ephemeral secrets (e.g. CVV) once the call ends. */
   wipe(keys: string[]) {
     for (const k of keys) this.secrets.delete(k);

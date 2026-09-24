@@ -55,7 +55,7 @@ test('sends one cached, single-tool, fallback-enabled request and maps the tool 
   assert.equal(req.fallbacks, 'default');
   assert.deepEqual(req.tool_choice, { type: 'auto', disable_parallel_tool_use: true });
   assert.deepEqual((req.system as { cache_control: unknown }[])[0].cache_control, { type: 'ephemeral' });
-  assert.deepEqual((req.tools as { name: string }[]).map((t) => t.name), ['press_keys', 'say', 'wait', 'ask_user', 'handoff_to_user', 'end_call']);
+  assert.deepEqual((req.tools as { name: string }[]).map((t) => t.name), ['press_keys', 'say', 'wait', 'ask_user', 'escalate_to_operator', 'handoff_to_user', 'end_call']);
 });
 
 test('the model context never contains secret values', () => {

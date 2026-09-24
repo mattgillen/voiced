@@ -153,6 +153,7 @@ export const bedford: Scenario = {
   title: 'Pay my Bedford utilities bill',
   pain: ['9 menus and prompts', '43 keypresses', 'Card, expiry, CVV and ZIP by keypad'],
   featured: true,
+  expect: { resolution: 'ai' },
   script,
   task(opts = {}) {
     const c = card(opts.cardId);

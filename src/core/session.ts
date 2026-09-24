@@ -1,11 +1,14 @@
 // CallSession runs one phone call: it listens to the line, replays known
 // screens from the IVR map, asks the brain when a prompt ends, enforces policy
-// in code, pauses for the user when money or judgment is involved, and hands
-// the call to the user when a human picks up.
+// in code, pauses for the user when money or judgment is involved, hands the
+// call to the user when a human picks up, and escalates to a human operator
+// (never just fails) when it gets stuck. Every call ends with an auditable
+// outcome: resolved by AI, resolved with human help, or failed (with why and where).
 
 import type { Brain, BrainState, Grant, HistoryItem } from '../brains/brain.js';
 import { decideByRules, summaryFor } from '../brains/rules.js';
 import type { MapMemory } from './memory.js';
+import type { EscalationTicket, OperatorCommand, OperatorQueue } from './operators.js';
 import {
   analyzeTurn,
   extractConfirmation,
@@ -20,7 +23,11 @@ import type {
   CallResult,
   CallStatus,
   Decision,
+  FailureReason,
+  FailureRecord,
   Line,
+  ResultKind,
+  ResultRecord,
   Speaker,
   Task,
   TurnAnalysis,
@@ -39,8 +46,10 @@ export interface SessionOptions {
   vault: Vault;
   /** Call time charged for a non-model decision (STT endpointing + compute). */
   thinkMs?: number;
-  /** Hard stop for runaway calls, in call-time milliseconds. */
+  /** Call time after which a stuck call is escalated (then ended 15 minutes later). */
   maxCallMs?: number;
+  /** Human fallback. Without one, a stuck call ends as failed (with its reason recorded). */
+  operators?: OperatorQueue;
   id?: string;
 }
 
@@ -54,6 +63,13 @@ interface Turn {
 }
 
 const EPHEMERAL_SECRETS = ['card.cvv'];
+const UNAVAILABLE = /\b(?:call (?:us )?back|are closed|office is closed|temporarily unavailable|is unavailable|high call volume|try again later|business hours|unable to take your call)\b/i;
+const RESULT_KINDS: Record<Task['kind'], ResultKind> = {
+  pay_bill: 'bill_paid',
+  cancel: 'membership_canceled',
+  reservation: 'reservation_booked',
+  reach_human: 'human_reached',
+};
 
 export class CallSession {
   readonly id: string;
@@ -81,6 +97,20 @@ export class CallSession {
   private replay?: { screenId: string; prev?: string };
   private replayed = new Set<string>();
   private done?: Promise<CallResult>;
+  // Human fallback and outcome tracking
+  private control: 'ai' | 'operator' = 'ai';
+  private inbox: { command: OperatorCommand; operator: string; done: () => void }[] = [];
+  private ticketId?: string;
+  private escalations = 0;
+  private operatorTouches = 0;
+  private operatorJoined = false;
+  private failure?: FailureRecord;
+  private evidence?: { t: number; text: string };
+  private visits = new Map<string, number>();
+  private lastStep = 'Dialing';
+  private recentIvr: string[] = [];
+  private lastHuman?: { t: number; text: string };
+  private deadline = 0;
 
   constructor(opts: SessionOptions) {
     this.opts = opts;
@@ -139,6 +169,7 @@ export class CallSession {
       resolve({ approved: false });
     }
     await this.opts.line.hangup();
+    if (!success) this.failure ??= { reason: 'user_declined', detail: 'You ended the call', step: this.lastStep, t: this.now() };
     this.finish(success ? 'success' : 'failure', success ? this.handoffSummary() : 'You ended the call.');
   }
 
@@ -150,12 +181,22 @@ export class CallSession {
     this.setStatus('dialing', `${task.business} · ${task.phone}`);
     await line.dial();
     this.setStatus('navigating');
-    const maxMs = this.opts.maxCallMs ?? 90 * 60_000;
+    this.deadline = this.opts.maxCallMs ?? 90 * 60_000;
 
     while (!this.ended) {
-      if (line.now() > maxMs || this.decisions > 250) {
+      // With a person driving, let their commands land before the line moves on.
+      if (this.control === 'operator') await new Promise((r) => setTimeout(r, 0));
+      await this.drainOperator();
+      if (this.ended) break;
+      if (line.now() > this.deadline || this.decisions > 250) {
+        if (this.opts.operators && this.control === 'ai' && this.decisions <= 250) {
+          this.deadline = line.now() + 15 * 60_000;
+          await this.execute({ action: { type: 'escalate', reason: 'timeout', detail: 'The call has run too long without finishing' }, reason: 'Taking too long. Getting a person to look.', source: 'guard' });
+          continue;
+        }
         await line.hangup();
-        this.finish('failure', 'Gave up: the call ran too long without finishing.');
+        this.failure ??= { reason: 'timeout', detail: 'The call ran too long without finishing', step: this.lastStep, t: line.now() };
+        this.finish('failure');
         break;
       }
       const ev = await line.next();
@@ -185,6 +226,8 @@ export class CallSession {
     this.emit({ type: 'heard', t: this.now(), speaker: effective, text, turn: this.turnNo });
 
     this.checkReplay(text);
+    if (effective === 'ivr') this.recentIvr = [...this.recentIvr.slice(-3), text];
+    if (effective === 'human') this.lastHuman ??= { t: this.now(), text };
 
     if (effective === 'hold' || looksLikeHold(text)) {
       if (this.holdStart === undefined) this.holdStart = this.now();
@@ -198,6 +241,7 @@ export class CallSession {
     if (code) {
       const key = /\b(?:case|ticket)\b/i.test(text) ? 'case' : 'confirmation';
       this.addNotes({ [key]: code });
+      if (key === this.task.successNote) this.evidence ??= { t: this.now(), text };
       if (key === this.task.successNote && this.task.kind !== 'reach_human') {
         await this.execute({
           action: { type: 'hangup', outcome: 'success', summary: summaryFor(this.snapshot()) },
@@ -209,7 +253,7 @@ export class CallSession {
     }
 
     // Fast path: a screen we've seen before, replayed at the moment it accepts input.
-    if (effective === 'ivr' && !this.turn.mapTried) {
+    if (effective === 'ivr' && !this.turn.mapTried && this.control === 'ai') {
       const hit = this.opts.memory.lookup(this.task.phone, this.task.kind, this.segment());
       if (hit && this.replayed.has(hit.screen.id)) {
         // Back on a screen we already replayed: the map sent us in a circle. Stop trusting it.
@@ -231,10 +275,19 @@ export class CallSession {
     if (this.turn.speaker === 'hold') return;
     this.state.counters.silences += 1;
     const analysis = this.analyzeSegment();
+    if (this.control === 'operator') return; // a person is driving; the AI stays quiet
+    if (this.turn.speaker === 'ivr' && (this.visits.get(this.screenKey()) ?? 0) >= 3) {
+      await this.execute({
+        action: { type: 'escalate', reason: 'loop', detail: `The phone tree keeps sending the call back to "${analysis.title}"` },
+        reason: 'Going in circles. Getting a person to look.',
+        source: 'guard',
+      });
+      return;
+    }
     let decision = await this.decide(analysis);
     for (let asks = 0; decision.action.type === 'ask_user' && !this.ended; asks++) {
       if (asks >= 2) {
-        decision = { action: { type: 'handoff', briefing: 'I got stuck and need you to take over.' }, reason: 'Still stuck after asking you. Handing the call over.', source: 'guard' };
+        decision = { action: { type: 'escalate', reason: 'dead_end', detail: 'Still stuck after asking you' }, reason: 'Still stuck after asking you. Getting a person to look.', source: 'guard' };
         break;
       }
       await this.execute(decision);
@@ -310,11 +363,14 @@ export class CallSession {
           return;
         }
         emitAction(vault.redact(a.digits));
+        const secret = vault.refs(a.digits).some((k) => vault.isSecret(k));
         for (const k of vault.refs(a.digits)) this.state.entered[k] = (this.state.entered[k] ?? 0) + 1;
-        this.state.history.push({ who: 'agent', text: `[pressed ${vault.redact(a.digits)}]` });
+        this.state.history.push({ who: d.source === 'operator' ? 'system' : 'agent', text: `[${d.source === 'operator' ? 'operator ' : ''}pressed ${vault.redact(a.digits)}]` });
         this.learn(d);
         this.resetTurn();
+        if (secret) await this.recording(false, 'Keying vault digits');
         await line.sendDigits(digits);
+        if (secret) await this.recording(true, 'Vault entry done');
         return;
       }
       case 'say': {
@@ -354,12 +410,97 @@ export class CallSession {
         this.setStatus('user_connected');
         return;
       }
+      case 'escalate':
+        emitAction(a.detail);
+        await this.escalate(a.reason, a.detail);
+        return;
       case 'hangup':
         emitAction(a.outcome === 'success' ? 'Hanging up: done' : 'Hanging up');
         await line.hangup();
         this.finish(a.outcome, a.summary);
         return;
     }
+  }
+
+  /** Hand the call and its full context to a person. */
+  private async escalate(reason: FailureReason, detail: string) {
+    this.escalations += 1;
+    this.failure ??= { reason, detail, step: this.lastStep, t: this.now() };
+    const desk = this.opts.operators;
+    if (!desk) {
+      await this.opts.line.hangup();
+      this.finish('failure');
+      return;
+    }
+    if (this.control === 'operator') return;
+    const ticket: EscalationTicket = {
+      id: `esc_${globalThis.crypto.randomUUID().slice(0, 8)}`,
+      callId: this.id,
+      business: this.task.business,
+      phone: this.task.phone,
+      task: this.task.title,
+      goal: this.task.goal,
+      reason,
+      detail,
+      step: this.lastStep,
+      t: this.now(),
+      transcript: this.state.history.slice(-30),
+      facts: this.task.facts.map((f) => ({ key: f.key, label: f.label, display: f.secret ? (f.display ?? '••••') : (f.value ?? '') })),
+      status: 'waiting',
+      openedAt: Date.now(),
+      log: [],
+    };
+    this.control = 'operator';
+    this.ticketId = ticket.id;
+    this.setStatus('with_operator', detail);
+    this.emit({ type: 'escalated', t: this.now(), ticketId: ticket.id, reason, detail, step: this.lastStep });
+    desk.open(ticket, {
+      act: (command, operator) => new Promise<void>((done) => this.inbox.push({ command, operator, done })),
+    });
+  }
+
+  /** Operator commands run between line events, never in the middle of one. */
+  private async drainOperator() {
+    while (this.inbox.length && !this.ended) {
+      const { command, operator, done } = this.inbox.shift()!;
+      this.operatorTouches += 1;
+      if (!this.operatorJoined) {
+        this.operatorJoined = true;
+        this.emit({ type: 'operator', t: this.now(), ticketId: this.ticketId ?? '', state: 'joined', operator });
+      }
+      const reason = `Operator ${operator}`;
+      switch (command.type) {
+        case 'press':
+          await this.execute({ action: { type: 'press', digits: command.digits }, reason, source: 'operator', cacheable: true });
+          break;
+        case 'say':
+          await this.execute({ action: { type: 'say', text: command.text }, reason, source: 'operator', cacheable: true });
+          break;
+        case 'handoff':
+          this.control = 'ai';
+          await this.execute({ action: { type: 'handoff', briefing: command.briefing }, reason, source: 'operator' });
+          break;
+        case 'return':
+          this.control = 'ai';
+          this.operatorJoined = false;
+          this.visits.clear();
+          this.state.counters.silences = 0;
+          this.emit({ type: 'operator', t: this.now(), ticketId: this.ticketId ?? '', state: 'returned', operator, note: command.note });
+          if (!this.ended) this.setStatus('navigating');
+          break;
+        case 'hangup':
+          this.emit({ type: 'operator', t: this.now(), ticketId: this.ticketId ?? '', state: 'closed', operator, note: command.summary });
+          this.failure = { ...(this.failure ?? { reason: 'unresolved', detail: command.summary, step: this.lastStep, t: this.now() }) };
+          await this.execute({ action: { type: 'hangup', outcome: 'failure', summary: command.summary }, reason, source: 'operator' });
+          break;
+      }
+      done();
+    }
+  }
+
+  private async recording(on: boolean, reason: string) {
+    await this.opts.line.setRecording?.(on);
+    this.emit({ type: 'recording', t: this.now(), paused: !on, reason });
   }
 
   private async askUser(request: UserRequest) {
@@ -373,11 +514,34 @@ export class CallSession {
     const response = await new Promise<UserResponse>((resolve) => this.pending.set(id, resolve));
     this.opts.line.elapse(Date.now() - t0);
     this.pendingRequest = undefined;
-    const grant: Grant = { request, response };
+    const grant: Grant = { request, response: redactResponse(response) };
     this.state.grants.push(grant);
-    this.state.history.push({ who: 'user', text: `${response.approved ? 'Approved' : 'Declined'}: ${request.title}${response.choice ? ` (${response.choice})` : ''}` });
+    if (request.kind === 'input' && response.approved && response.text && request.factKey) this.addFact(request, response.text);
+    this.state.history.push({
+      who: 'user',
+      text:
+        request.kind === 'input'
+          ? `${response.approved && response.text ? 'Provided' : 'Could not provide'}: ${request.factLabel ?? request.title}`
+          : `${response.approved ? 'Approved' : 'Declined'}: ${request.title}${response.choice ? ` (${response.choice})` : ''}`,
+    });
     this.emit({ type: 'user_response', t: this.now(), id, response: redactResponse(response) });
     if (!this.ended) this.setStatus(previous === 'awaiting_user' ? 'navigating' : previous);
+  }
+
+  /** Something the user told us mid-call (e.g. an identity check) becomes a fact; secrets go to the vault. */
+  private addFact(request: Extract<UserRequest, { kind: 'input' }>, value: string) {
+    const key = request.factKey!;
+    const label = request.factLabel ?? request.title;
+    const aliases = request.aliases ?? [label.toLowerCase()];
+    const secret = request.secret !== false;
+    const fact = secret
+      ? { key, label, secret: true, display: '••••', aliases }
+      : { key, label, value, aliases };
+    this.task.facts = [...this.task.facts.filter((f) => f.key !== key), fact];
+    this.state.task = this.task;
+    this.opts.vault.addFact(fact);
+    if (secret) this.opts.vault.set(key, value.replace(/\s+/g, ''));
+    this.state.entered[key] = 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -403,11 +567,19 @@ export class CallSession {
     return this.turn.sentences.slice(this.turn.segmentStart);
   }
 
+  /** Identifies the current screen for loop detection, skipping "sorry, I didn't get that" preambles. */
+  private screenKey(): string {
+    const first = this.segment().find((s) => !looksLikeInvalid(s) && !/\bdidn'?t hear\b/i.test(s)) ?? this.segment()[0] ?? '';
+    return fingerprint(first);
+  }
+
   private analyzeSegment(): TurnAnalysis {
     const segment = this.segment();
     const analysis = analyzeTurn(segment.join(' '), this.turn.speaker);
     if (this.turn.analyzedAt !== this.turn.sentences.length && segment.length) {
       this.turn.analyzedAt = this.turn.sentences.length;
+      this.lastStep = analysis.kind === 'human' ? 'Live person' : analysis.kind === 'hold' ? 'Hold queue' : analysis.title;
+      if (this.turn.speaker === 'ivr') this.visits.set(this.screenKey(), (this.visits.get(this.screenKey()) ?? 0) + 1);
       const known = !!this.opts.memory.match(this.task.phone, segment);
       this.emit({ type: 'turn', t: this.now(), turn: this.turnNo, analysis, fingerprint: fingerprint(segment[0]), known });
     }
@@ -417,8 +589,11 @@ export class CallSession {
   /** Remember what worked, so the next caller skips the listening. Never learns from humans. */
   private learn(d: Decision) {
     if (d.source === 'map' || !d.cacheable || this.turn.speaker !== 'ivr') return;
-    const segment = this.segment();
-    if (!segment.length || looksLikeInvalid(segment[0])) return;
+    // Key the screen by its own prompt, not by the "sorry, that option is unavailable" that preceded it.
+    const raw = this.segment();
+    const start = raw.findIndex((s) => !looksLikeInvalid(s) && !/^(?:returning to|sorry, i didn'?t hear)\b/i.test(s) && !/\bdidn'?t hear\b/i.test(s));
+    const segment = start === -1 ? [] : raw.slice(start);
+    if (!segment.length) return;
     const analysis = analyzeTurn(segment.join(' '), 'ivr');
     const prev = this.lastScreen;
     this.lastScreen = this.opts.memory.learn(
@@ -428,7 +603,7 @@ export class CallSession {
       segment,
       analysis,
       d.action,
-      d.reason,
+      d.source === 'operator' ? 'Learned from a human operator on an earlier call' : d.reason,
       prev,
     );
   }
@@ -484,30 +659,57 @@ export class CallSession {
       resolve({ approved: false });
     }
     const succeeded = outcome ?? (this.state.notes[this.task.successNote] ? 'success' : 'failure');
-    const declined = this.state.grants.find((g) => !g.response.approved);
+    const unheard = this.turn.sentences.slice(this.turn.analyzedAt).find((s) => !looksLikeInvalid(s));
+    if (unheard && this.turn.speaker === 'ivr' && !this.failure && !UNAVAILABLE.test(unheard)) this.lastStep = unheard.replace(/[.!?]$/, '');
+    const declined = this.state.grants.find((g) => !g.response.approved && g.request.kind !== 'input');
+    if (succeeded === 'failure' && !this.failure) {
+      this.failure = declined
+        ? { reason: 'user_declined', detail: `You declined "${declined.request.title}"`, step: this.lastStep, t: this.now() }
+        : UNAVAILABLE.test(this.recentIvr.join(' '))
+          ? { reason: 'business_unavailable', detail: this.recentIvr.find((l) => UNAVAILABLE.test(l)) ?? this.recentIvr.join(' '), step: this.lastStep, t: this.now() }
+          : { reason: 'hung_up', detail: 'The business ended the call', step: this.lastStep, t: this.now() };
+    }
+    const resolution = succeeded === 'failure' ? 'failed' : this.operatorTouches > 0 ? 'human_assisted' : 'ai';
+    const helped = resolution === 'human_assisted' && this.failure ? ` A Voiced operator stepped in at "${this.failure.step}".` : '';
     const text =
-      summary ??
-      (succeeded === 'success'
-        ? this.task.kind === 'reach_human'
-          ? this.handoffSummary()
-          : summaryFor(this.snapshot())
-        : declined
-          ? `Stopped: you declined "${declined.request.title}". Nothing was committed.`
-          : 'The call ended before the task was finished.');
+      (summary ??
+        (succeeded === 'success'
+          ? this.task.kind === 'reach_human'
+            ? this.handoffSummary()
+            : summaryFor(this.snapshot())
+          : declined
+            ? `Stopped: you declined "${declined.request.title}". Nothing was committed.`
+            : `Couldn't finish: ${this.failure!.detail} (at "${this.failure!.step}").`)) + helped;
     this.opts.vault.wipe(EPHEMERAL_SECRETS);
+    this.opts.operators?.close(this.id);
     this.result = {
       outcome: succeeded,
+      resolution,
+      result: succeeded === 'success' ? this.resultRecord() : undefined,
+      failure: this.failure,
       summary: text,
       notes: { ...this.state.notes },
       callMs: this.now(),
       holdMs: this.holdMs,
       userTouches: this.userTouches,
+      escalations: this.escalations,
+      operatorTouches: this.operatorTouches,
       turns: this.turnNo,
       mapHits: this.mapHits,
       llmCalls: this.llmCalls,
     };
     this.setStatus('ended');
     this.emit({ type: 'ended', t: this.now(), result: this.result });
+  }
+
+  private resultRecord(): ResultRecord {
+    const n = this.state.notes;
+    return {
+      kind: RESULT_KINDS[this.task.kind],
+      confirmation: n.confirmation ?? n.case,
+      amount: n.paid,
+      evidence: this.task.kind === 'reach_human' ? this.lastHuman : this.evidence,
+    };
   }
 
   private setStatus(status: CallStatus, detail?: string) {
@@ -532,6 +734,12 @@ function newTurn(speaker: Speaker): Turn {
 function redactResponse(r: UserResponse): UserResponse {
   return { approved: r.approved, choice: r.choice, text: r.text ? '•••' : undefined };
 }
+
+export const RESOLUTION_LABELS: Record<CallResult['resolution'], string> = {
+  ai: 'Resolved by AI',
+  human_assisted: 'Resolved with human help',
+  failed: 'Not resolved',
+};
 
 export function describe(a: Action): string {
   switch (a.type) {

@@ -3,6 +3,7 @@
 import type { Brain } from '../brains/brain.js';
 import { RulesBrain } from '../brains/rules.js';
 import { MapMemory } from '../core/memory.js';
+import type { OperatorQueue } from '../core/operators.js';
 import { CallSession } from '../core/session.js';
 import { Vault } from '../core/vault.js';
 import { instantClock, SimLine, type SimClock } from './engine.js';
@@ -13,6 +14,7 @@ export interface SimulateOptions {
   memory?: MapMemory;
   clock?: SimClock;
   scenario?: ScenarioOptions;
+  operators?: OperatorQueue;
   id?: string;
 }
 
@@ -30,6 +32,7 @@ export function simulate(scenarioId: string, opts: SimulateOptions = {}) {
     fallback: new RulesBrain(),
     memory: opts.memory ?? new MapMemory(),
     vault,
+    operators: opts.operators,
   });
   return { session, line, task, scenario };
 }

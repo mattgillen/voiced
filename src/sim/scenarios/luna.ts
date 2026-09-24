@@ -126,6 +126,7 @@ export const luna: Scenario = {
   title: 'Book dinner for 4, Friday 7–8pm',
   pain: ['Voice-only booking bot', 'Your time is sold out', 'Phone number by keypad'],
   featured: false,
+  expect: { resolution: 'ai' },
   script,
   task() {
     return {

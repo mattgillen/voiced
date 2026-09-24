@@ -160,6 +160,7 @@ export const kestrel: Scenario = {
   title: 'Dispute a charge, hand me a human',
   pain: ['IVR refuses to transfer', '18-minute hold', 'Rep needs the account holder'],
   featured: false,
+  expect: { resolution: 'ai' },
   script,
   task() {
     return {

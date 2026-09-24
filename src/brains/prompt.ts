@@ -23,7 +23,8 @@ Policy (also enforced in code, so don't try to work around it):
 - On hold: wait. Never hang up on a hold queue.
 - Live humans: when a person answers (introduces themselves by name, asks who they're speaking with), say you're an AI assistant calling for the user and state the purpose in one or two sentences. If the task says to hand off, ask whether you can connect the user, then call handoff_to_user once they agree. Don't share secrets or make commitments with people.
 - When you hear the confirmation or reference number that completes the goal, call end_call with outcome "success" and a one-line summary that includes it.
-- If the same prompt keeps repeating or rejecting you, try asking for a representative ("Representative." or pressing 0). If that fails, handoff_to_user with a briefing.
+- If the IVR asks for something that isn't in FACTS (an identity check, a number you don't have), call ask_user with kind "input" and a short fact_label. The user's answer goes to the vault and shows up in FACTS as a placeholder.
+- If you're stuck (no option leads to the goal, the tree loops, a check you can't pass, the same prompt keeps rejecting you), call escalate_to_operator. A human operator takes over with the full context. Don't guess and don't give up: escalating is the right move, and it is how the system learns.
 
 Write "reason" as one short sentence the user reads in a live transcript. This is latency-sensitive: decide quickly.`;
 
@@ -110,15 +111,28 @@ export const TOOL_SPECS: ToolSpec[] = [
     input_schema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['approve', 'approve_payment', 'choose'] },
+        kind: { type: 'string', enum: ['approve', 'approve_payment', 'choose', 'input'] },
         title: { type: 'string', description: 'Push-notification title, under 60 characters.' },
         detail: { type: 'string' },
         options: { type: 'array', items: { type: 'string' }, description: 'For kind=choose.' },
         amount: { type: 'number', description: 'For kind=approve_payment: the amount before fees.' },
         fee: { type: 'number', description: 'For kind=approve_payment: the fee, 0 if none.' },
+        fact_label: { type: 'string', description: 'For kind=input: what the IVR wants, e.g. "last 4 of SSN".' },
         reason,
       },
       required: ['kind', 'title', 'detail', 'reason'],
+    },
+  },
+  {
+    name: 'escalate_to_operator',
+    description: 'Hand the call to a human operator with the full context. Use when stuck: a dead end, a loop, a check you cannot pass, repeated rejections.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', enum: ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'timeout'] },
+        detail: { type: 'string', description: 'What is blocking, in one sentence. Shown to the operator and the user.' },
+      },
+      required: ['reason', 'detail'],
     },
   },
   {
@@ -181,8 +195,17 @@ export function toDecision(name: string, input: Record<string, unknown>, s: Brai
         };
       } else if (kind === 'choose' && Array.isArray(input.options) && input.options.length) {
         action = { type: 'ask_user', request: { kind: 'choose', title, detail, options: input.options.map(String) } };
+      } else if (kind === 'input') {
+        const label = typeof input.fact_label === 'string' && input.fact_label.trim() ? input.fact_label.trim() : title;
+        const key = `asked.${label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32)}`;
+        action = { type: 'ask_user', request: { kind: 'input', title, detail, secret: true, factKey: key, factLabel: label, aliases: [label.toLowerCase()] } };
       } else action = { type: 'ask_user', request: { kind: 'approve', title, detail } };
       break;
+    }
+    case 'escalate_to_operator': {
+      const allowed = ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'timeout'] as const;
+      const r = allowed.find((a) => a === input.reason) ?? 'dead_end';
+      return { action: { type: 'escalate', reason: r, detail: str('detail') }, reason: 'Stuck. Getting a person to look.', source: 'llm' };
     }
     case 'handoff_to_user':
       action = { type: 'handoff', briefing: str('briefing') };
@@ -207,6 +230,7 @@ Allowed "tool" values and their fields:
 - press_keys: digits, reason
 - say: text, reason
 - wait: reason
-- ask_user: kind ("approve" | "approve_payment" | "choose"), title, detail, options (for choose), amount and fee (for approve_payment), reason
+- ask_user: kind ("approve" | "approve_payment" | "choose" | "input"), title, detail, options (for choose), amount and fee (for approve_payment), fact_label (for input), reason
+- escalate_to_operator: reason ("dead_end" | "loop" | "identity_check" | "business_unavailable" | "timeout"), detail
 - handoff_to_user: briefing, reason
 - end_call: outcome ("success" | "failure"), summary, reason`;
