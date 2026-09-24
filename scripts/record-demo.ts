@@ -43,6 +43,8 @@ await page.evaluate(() => {
 const caption = (text: string) => page.evaluate((t) => (document.getElementById('cap')!.textContent = t), text);
 const wait = (ms: number) => page.waitForTimeout(ms);
 async function click(p: Page, selector: string) {
+  await p.locator(selector).first().scrollIntoViewIfNeeded();
+  await wait(200);
   const box = await p.locator(selector).first().boundingBox();
   if (!box) throw new Error(`no ${selector}`);
   await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 18 });
@@ -91,6 +93,22 @@ await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
 await caption('Canceled. Confirmation CX44190. You tapped once.');
 await wait(3200);
 
+await caption('When the AI gets stuck, a person steps in. This gym’s menu loops.');
+await click(page, '#result .secondary');
+await wait(600);
+await click(page, '#hard-list .task:has-text("menu loops")');
+await wait(1200);
+await click(page, '#sheet-form button[type=submit]');
+await page.waitForSelector('.escalation', { timeout: 60_000 });
+await caption('Stuck in a loop, so it escalates to a Voiced operator: disclosed, and they never see your card or account numbers.');
+await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
+await caption('“Resolved with human help”, and it says so. The operator’s fix is now on the map.');
+await wait(3600);
+await click(page, '#result .primary');
+await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
+await caption('Next call: resolved by AI. Every exception becomes training data.');
+await wait(3600);
+
 await caption('Need a person? Voiced gets past the deflection and waits out the hold for you.');
 await click(page, '#result .secondary');
 await wait(600);
@@ -108,7 +126,7 @@ await wait(4200);
 await click(page, '#replies button');
 await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
 await wait(1500);
-await caption('Voiced: the phone layer for AI agents. API · MCP · built for Muse connectors.');
+await caption('Voiced: the phone layer for AI agents. AI with human backup. API · MCP · built for Muse connectors.');
 await wait(4000);
 
 await context.close();

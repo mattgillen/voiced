@@ -37,6 +37,8 @@ export interface TaskPolicy {
   payment?: PaymentAuthorization;
   /** The user authorized an irreversible action such as a cancellation. */
   authorizedCommit?: boolean;
+  /** The call is being recorded: every person on it is told (all-party consent). */
+  recorded?: boolean;
 }
 
 export interface Task {

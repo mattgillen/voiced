@@ -57,6 +57,40 @@ for (const [name, viewport, scheme] of [
     await page.waitForSelector('#result:not([hidden])', { timeout: 30_000 });
     await page.screenshot({ path: `${out}/${name}-7-human-done.png` });
     console.log(`desktop kestrel: ${await page.textContent('#result p')}`);
+
+    // Hard case: the menu loops, a (simulated) operator steps in, the fix is learned.
+    await page.click('#result .secondary');
+    await page.click('#hard-list .task:has-text("menu loops")');
+    await page.click('#sheet-form button[type=submit]');
+    await page.waitForSelector('.escalation', { timeout: 60_000 });
+    await page.screenshot({ path: `${out}/${name}-8-escalated.png` });
+    await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
+    console.log(`loop, first call: ${await page.textContent('#result h3')} · ${await page.textContent('#result .broke')}`);
+    await page.screenshot({ path: `${out}/${name}-9-human-assisted.png` });
+    await page.click('#result .primary');
+    await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
+    console.log(`loop, second call: ${await page.textContent('#result h3')}`);
+
+    // Hard case: identity check the task can't answer, typed straight into the vault.
+    await page.click('#result .secondary');
+    await page.click('#hard-list .task:has-text("identity check")');
+    await page.click('#sheet-form button[type=submit]');
+    await page.waitForSelector('#push:not([hidden]) input', { timeout: 60_000 });
+    await page.screenshot({ path: `${out}/${name}-10-identity.png` });
+    await page.fill('#push input', '6789');
+    await page.click('#push .primary');
+    await page.waitForSelector('#push:not([hidden]) .primary:has-text("Approve")', { timeout: 60_000 });
+    await page.click('#push .primary');
+    await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
+    console.log(`identity: ${await page.textContent('#result h3')} · ${await page.textContent('#result .billable')}`);
+
+    // Hard case: nothing can finish it; it must say so.
+    await page.click('#result .secondary');
+    await page.click('#hard-list .task:has-text("payments line down")');
+    await page.click('#sheet-form button[type=submit]');
+    await page.waitForSelector('#result:not([hidden])', { timeout: 60_000 });
+    console.log(`down: ${await page.textContent('#result h3')} · ${await page.textContent('#result .broke')}`);
+    await page.screenshot({ path: `${out}/${name}-11-failed.png` });
   }
   await context.close();
 }

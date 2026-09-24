@@ -55,8 +55,10 @@ export class MemoryStore implements MapStore {
 
 const INPUT_CUE = /\b(?:press|enter|say|oprima|key in|tell me|which would you|what (?:day|date|time|name)|how many)\b|\?/i;
 
+/** Digits only, without the North American country code, so "+1 (415) 555-0142" matches "(415) 555-0142". */
 export function phoneKey(phone: string): string {
-  return phone.replace(/\D/g, '');
+  const digits = phone.replace(/\D/g, '');
+  return digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
 }
 
 export class MapMemory {

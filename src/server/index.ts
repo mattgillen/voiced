@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { ClaudeBrain } from '../brains/claude.js';
 import { RulesBrain } from '../brains/rules.js';
 import { MapMemory, type IvrMap } from '../core/memory.js';
+import { OperatorQueue, type OperatorCommand } from '../core/operators.js';
+import { attachScriptedOperator } from '../sim/operator.js';
 import { Auth, AuthError } from './auth.js';
 import { CallManager, HttpError, type ManagedCall } from './calls.js';
 import { buildMcpServer } from './mcp.js';
@@ -26,6 +28,9 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
 const DATA = process.env.VOICED_DATA ?? join(ROOT, '.voiced');
 const API_KEY = process.env.VOICED_API_KEY ?? 'vk_demo_local';
+const OPERATOR_KEY = process.env.VOICED_OPERATOR_KEY ?? 'vo_demo_local';
+// "scripted" (default): a stand-in follows each simulated tree's playbook. "manual": people use the operator API.
+const OPERATOR_MODE = process.env.VOICED_OPERATOR === 'manual' ? 'manual' : 'scripted';
 const DEMO_USER = 'Jordan Lee (demo)';
 const useClaude = process.env.VOICED_BRAIN === 'claude' || (!!process.env.ANTHROPIC_API_KEY && process.env.VOICED_BRAIN !== 'rules');
 
@@ -36,7 +41,11 @@ seedMaps(store, join(ROOT, 'maps'));
 const memory = new MapMemory(store);
 const auth = new Auth(new Map([[API_KEY, DEMO_USER]]));
 const twilio = twilioFromEnv(() => base);
+const operators = new OperatorQueue();
+if (OPERATOR_MODE === 'scripted') attachScriptedOperator(operators, { delayMs: Number(process.env.VOICED_OPERATOR_DELAY_MS ?? 1500) });
 const calls = new CallManager({
+  operators,
+  dialPolicy: { allowed: (process.env.VOICED_ALLOWED_NUMBERS ?? '').split(',').filter(Boolean), userPhone: process.env.VOICED_USER_PHONE },
   memory,
   brain: () => (useClaude ? new ClaudeBrain() : new RulesBrain()),
   baseUrl: base,
@@ -141,6 +150,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, method: 
     return user;
   };
 
+  if (parts[0] === 'operator') return operatorApi(req, res, parts.slice(1), method);
   if (parts[0] === 'businesses' && method === 'GET') return sendJson(res, 200, calls.directory());
   if (parts[0] === 'stats' && method === 'GET') return sendJson(res, 200, calls.stats());
   if (parts[0] === 'maps' && method === 'GET') return sendJson(res, 200, memory.all().map(mapSummary));
@@ -204,6 +214,59 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, method: 
     }
   }
   throw new HttpError(404, 'Not found');
+}
+
+/**
+ * The operator queue: the stub a human console sits on. Operators see redacted
+ * context and act with placeholders; they never receive secrets.
+ *   GET  /v1/operator/tickets[?status=waiting]
+ *   GET  /v1/operator/tickets/:id
+ *   POST /v1/operator/tickets/:id/actions  {type: press|say|handoff|return|hangup, digits|text|briefing|note|summary, operator}
+ */
+async function operatorApi(req: IncomingMessage, res: ServerResponse, parts: string[], method: string) {
+  const token = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '')?.[1];
+  if (token !== OPERATOR_KEY) throw new HttpError(401, 'Operator endpoints need Authorization: Bearer <VOICED_OPERATOR_KEY>');
+  if (parts[0] !== 'tickets') throw new HttpError(404, 'Not found');
+  if (!parts[1] && method === 'GET') {
+    const status = new URL(req.url ?? '/', base).searchParams.get('status') as 'waiting' | 'active' | 'returned' | 'closed' | null;
+    return sendJson(res, 200, operators.list(status ?? undefined));
+  }
+  const ticket = operators.get(parts[1] ?? '');
+  if (!ticket) throw new HttpError(404, `No ticket ${parts[1]}`);
+  if (!parts[2] && method === 'GET') return sendJson(res, 200, ticket);
+  if (parts[2] === 'actions' && method === 'POST') {
+    const body = await readJson(req);
+    const operator = String(body.operator ?? 'operator').slice(0, 60);
+    const command = toCommand(body);
+    try {
+      return sendJson(res, 200, await operators.act(ticket.id, command, operator));
+    } catch (err) {
+      throw new HttpError(409, err instanceof Error ? err.message : String(err));
+    }
+  }
+  throw new HttpError(404, 'Not found');
+}
+
+function toCommand(body: Record<string, unknown>): OperatorCommand {
+  const text = (k: string) => {
+    const v = body[k];
+    if (typeof v !== 'string' || !v.trim()) throw new HttpError(400, `${String(body.type)} needs "${k}"`);
+    return v.trim().slice(0, 500);
+  };
+  switch (body.type) {
+    case 'press':
+      return { type: 'press', digits: text('digits') };
+    case 'say':
+      return { type: 'say', text: text('text') };
+    case 'handoff':
+      return { type: 'handoff', briefing: text('briefing') };
+    case 'return':
+      return { type: 'return', note: typeof body.note === 'string' ? body.note.slice(0, 500) : undefined };
+    case 'hangup':
+      return { type: 'hangup', summary: text('summary') };
+    default:
+      throw new HttpError(400, 'type must be press, say, handoff, return or hangup');
+  }
 }
 
 function streamEvents(req: IncomingMessage, res: ServerResponse, call: ManagedCall) {
@@ -336,6 +399,7 @@ server.listen(PORT, () => {
   console.log(`  remote MCP   ${base}/mcp  (OAuth or Bearer ${API_KEY})`);
   console.log(`  brain        ${useClaude ? `Claude (${process.env.VOICED_MODEL ?? 'claude-opus-5'})` : 'rules (set ANTHROPIC_API_KEY for Claude)'}`);
   console.log(`  real calls   ${twilio ? 'Twilio' : 'off (simulated phone trees only)'}`);
+  console.log(`  operators    ${OPERATOR_MODE === 'scripted' ? 'scripted stand-in (VOICED_OPERATOR=manual for people)' : 'manual'} · ${base}/v1/operator/tickets (Bearer ${OPERATOR_KEY})`);
 });
 
 process.on('SIGINT', () => {

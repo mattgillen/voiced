@@ -23,6 +23,8 @@ export interface CustomTaskInput {
   decline_retention_offers?: boolean;
   /** The user authorized the irreversible step (e.g. the cancellation itself). */
   authorize_commit?: boolean;
+  /** The caller attests `to` is a business service line (required unless it's allowlisted). */
+  business_line_attested?: boolean;
 }
 
 interface StandardFact {

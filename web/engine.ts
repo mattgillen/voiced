@@ -5,11 +5,13 @@
 import type { Brain } from '../src/brains/brain.js';
 import { RulesBrain } from '../src/brains/rules.js';
 import { MapMemory, type IvrMap, type MapStore } from '../src/core/memory.js';
+import { OperatorQueue } from '../src/core/operators.js';
+import { attachScriptedOperator } from '../src/sim/operator.js';
 import { CallSession } from '../src/core/session.js';
 import type { CallEvent, CallResult, UserResponse } from '../src/core/types.js';
 import { Vault } from '../src/core/vault.js';
 import { PacedClock, SimLine } from '../src/sim/engine.js';
-import { getScenario, scenarios } from '../src/sim/scenarios/index.js';
+import { allScenarios, getScenario } from '../src/sim/scenarios/index.js';
 
 export interface Business {
   id: string;
@@ -19,6 +21,8 @@ export interface Business {
   title: string;
   pain: string[];
   featured: boolean;
+  /** A hard case (loops, identity checks, closures) from the eval set. */
+  hard: boolean;
 }
 
 export interface MapView {
@@ -32,6 +36,9 @@ export interface Stats {
   calls: number;
   completed: number;
   completionRate: number | null;
+  /** Top-line: share of calls resolved by AI with no human. */
+  aiRate: number | null;
+  humanRate: number | null;
   holdMinutes: number;
   mapHits: number;
 }
@@ -64,7 +71,8 @@ export interface Engine {
   resetMaps(): Promise<void>;
 }
 
-const BUSINESSES: Business[] = scenarios.map((s) => ({
+const BUSINESSES: Business[] = allScenarios.map((s) => ({
+  hard: s.hard ?? false,
   id: s.id,
   business: s.business,
   phone: s.phone,
@@ -100,8 +108,12 @@ export class LocalEngine implements Engine {
   readonly mode = 'local' as const;
   private memory = new MapMemory(new LocalStore('voiced.maps.v1'));
   private records: CallResult[] = readRecords();
+  /** Human fallback. In the demo a scripted stand-in plays the operator, labeled as such. */
+  private operators = new OperatorQueue();
 
-  constructor(private brain: () => Brain = () => new RulesBrain(), public brainLabel = 'Rules brain') {}
+  constructor(private brain: () => Brain = () => new RulesBrain(), public brainLabel = 'Rules brain') {
+    attachScriptedOperator(this.operators, { delayMs: 1800 });
+  }
 
   setBrain(brain: () => Brain, label: string) {
     this.brain = brain;
@@ -124,6 +136,7 @@ export class LocalEngine implements Engine {
       fallback: new RulesBrain(),
       memory: this.memory,
       vault: new Vault(task.facts, secrets),
+      operators: this.operators,
     });
     const listeners: ((e: CallEvent) => void)[] = [];
     session.subscribe((e) => {
@@ -177,10 +190,13 @@ function readRecords(): CallResult[] {
 
 function summarize(records: CallResult[]): Stats {
   const done = records.filter((r) => r.outcome === 'success').length;
+  const rate = (n: number) => (records.length ? n / records.length : null);
   return {
     calls: records.length,
     completed: done,
-    completionRate: records.length ? done / records.length : null,
+    completionRate: rate(done),
+    aiRate: rate(records.filter((r) => (r.resolution ?? (r.outcome === 'success' ? 'ai' : 'failed')) === 'ai').length),
+    humanRate: rate(records.filter((r) => r.resolution === 'human_assisted').length),
     holdMinutes: Math.round(records.reduce((a, r) => a + r.holdMs, 0) / 60_000),
     mapHits: records.reduce((a, r) => a + r.mapHits, 0),
   };
@@ -250,7 +266,15 @@ export class RemoteEngine implements Engine {
 
   async stats(): Promise<Stats> {
     const s = await this.api('/v1/stats');
-    return { calls: s.calls, completed: s.completed, completionRate: s.completion_rate, holdMinutes: s.hold_minutes_absorbed, mapHits: s.map_hits };
+    return {
+      calls: s.calls,
+      completed: s.completed,
+      completionRate: s.completion_rate,
+      aiRate: s.ai_resolution_rate,
+      humanRate: s.human_assisted_rate,
+      holdMinutes: s.hold_minutes_absorbed,
+      mapHits: s.map_hits,
+    };
   }
 
   async resetMaps() {

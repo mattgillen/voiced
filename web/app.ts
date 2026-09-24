@@ -1,4 +1,4 @@
-import { formatDuration } from '../src/core/session.js';
+import { formatDuration, RESOLUTION_LABELS } from '../src/core/session.js';
 import type { CallEvent, CallResult, UserRequest } from '../src/core/types.js';
 import { RulesBrain } from '../src/brains/rules.js';
 import { DTMF, speak, stopSpeech, tone, unlockAudio } from './audio.js';
@@ -81,9 +81,22 @@ const STATUS: Record<string, string> = {
   on_hold: 'On hold',
   talking_to_human: 'Person on the line',
   awaiting_user: 'Needs you',
+  with_operator: 'Voiced operator',
   handing_off: 'Calling you in',
   user_connected: 'You’re on',
   ended: 'Ended',
+};
+
+const base = (b: Business) => b.id.split('-')[0];
+const REASONS: Record<string, string> = {
+  dead_end: 'dead end',
+  loop: 'menu loop',
+  identity_check: 'identity check',
+  business_unavailable: 'business unavailable',
+  hung_up: 'business hung up',
+  user_declined: 'you declined',
+  timeout: 'took too long',
+  unresolved: 'operator couldn’t fix it',
 };
 
 const REPLIES: Record<string, string[]> = {
@@ -98,15 +111,13 @@ function boot() {
     'Voiced dials, gets through the menus, keys in your account and card from the vault, pays, and hangs up with a confirmation number. It stops to ask you only if a fee or the amount goes past what you approved.';
   $('hero-pain').replaceChildren(...hero.pain.map((p) => h('li', {}, p)));
   $('hero-cta').addEventListener('click', () => request(hero, hero.title));
-  $('task-list').replaceChildren(
-    ...businesses
-      .filter((b) => b.id !== hero.id)
-      .map((b) => {
-        const btn = h('button', { type: 'button', class: 'task' }, h('span', { class: 'cat' }, b.category), h('span', { class: 't' }, b.title), h('span', { class: 'b' }, b.business));
-        btn.addEventListener('click', () => request(b, b.title));
-        return btn;
-      }),
-  );
+  const taskButton = (b: Business) => {
+    const btn = h('button', { type: 'button', class: 'task' }, h('span', { class: 'cat' }, b.category), h('span', { class: 't' }, b.title), h('span', { class: 'b' }, b.pain[0] ?? b.business));
+    btn.addEventListener('click', () => request(b, b.title));
+    return btn;
+  };
+  $('task-list').replaceChildren(...businesses.filter((b) => b.id !== hero.id && !b.hard).map(taskButton));
+  $('hard-list').replaceChildren(...businesses.filter((b) => b.hard && b.id !== 'bedford-moved').map(taskButton));
   renderSuggestions();
   renderKeypad();
 
@@ -157,7 +168,7 @@ function boot() {
 function renderSuggestions() {
   const box = $('suggestions');
   box.replaceChildren(
-    ...businesses.map((b) => {
+    ...businesses.filter((b) => !b.hard).map((b) => {
       const btn = h('button', { type: 'button', class: b.id === hero.id ? 'hero' : '' }, b.title);
       btn.addEventListener('click', () => request(b, b.title));
       return btn;
@@ -231,7 +242,7 @@ function openSheet(biz: Business) {
     h('div', { class: 'field' }, h('label', { for: id }, label), control, hint ? h('span', { class: 'hint' }, hint) : null);
   let body: Child[] = [];
   let cta = 'Start the call';
-  if (biz.id === 'bedford') {
+  if (base(biz) === 'bedford') {
     const card = h('select', { id: 'auth-card' }, h('option', { value: 'visa' }, 'Visa •• 4242'), h('option', { value: 'amex' }, 'Amex •• 0005'));
     const max = h('input', { id: 'auth-max', type: 'number', min: '1', step: '1', value: '200', inputmode: 'decimal' });
     const fee = h('select', { id: 'auth-fee' }, h('option', { value: '0' }, 'Ask me first'), h('option', { value: '5' }, 'Up to $5.00'));
@@ -243,13 +254,13 @@ function openSheet(biz: Business) {
       field('Security code', 'auth-cvv', cvv, 'Used on this call only, then wiped. The model never sees it.'),
     ];
     cta = 'Approve & call';
-  } else if (biz.id === 'irontemple') {
+  } else if (base(biz) === 'irontemple') {
     body = [
       h('p', {}, 'Voiced will call ', h('b', {}, biz.business), ' and cancel your membership.'),
       h('ul', {}, h('li', {}, 'Decline the retention offers (discounts, freezes)'), h('li', {}, 'Confirm the cancellation and get a confirmation number')),
     ];
     cta = 'Cancel my membership';
-  } else if (biz.id === 'kestrel') {
+  } else if (base(biz) === 'kestrel') {
     body = [
       h('p', {}, 'Voiced will get past the ', h('b', {}, biz.business), ' phone tree, wait on hold, brief the rep about the $49.99 charge, and bring you in when a person is ready.'),
       h('ul', {}, h('li', {}, 'You won’t hear the hold music'), h('li', {}, 'Voiced tells the rep it’s an AI assistant')),
@@ -271,7 +282,7 @@ function openSheet(biz: Business) {
   form.onsubmit = (e) => {
     e.preventDefault();
     const opts: StartOptions = { businessId: biz.id, speed };
-    if (biz.id === 'bedford') {
+    if (base(biz) === 'bedford') {
       opts.card = $<HTMLSelectElement>('auth-card').value;
       opts.maxAmount = Number($<HTMLInputElement>('auth-max').value) || 200;
       opts.maxFee = Number($<HTMLSelectElement>('auth-fee').value);
@@ -297,7 +308,7 @@ async function start(biz: Business, opts: StartOptions) {
   if (opts.maxAmount !== undefined) Object.assign(args, { max_amount: opts.maxAmount, max_fee: opts.maxFee });
   toolcall('start_call', args);
   bot(
-    biz.id === 'bedford'
+    base(biz) === 'bedford'
       ? `Calling ${biz.business}. I’ll pay up to ${money(opts.maxAmount ?? 200)} on ${opts.card === 'amex' ? 'Amex •• 0005' : 'Visa •• 4242'}${opts.maxFee ? ` plus fees up to ${money(opts.maxFee)}` : ''} and only interrupt you if it costs more.`
       : `Calling ${biz.business}. I’ll handle the phone tree and only interrupt you if I need a yes.`,
   );
@@ -345,7 +356,7 @@ function onEvent(e: CallEvent) {
       if (e.status === 'on_hold') bot(`I’m on hold with ${L.biz.business}. I’ll wait so you don’t have to.`);
       if (e.status === 'user_connected') {
         $('talk').hidden = false;
-        const replies = REPLIES[L.biz.id] ?? [];
+        const replies = REPLIES[base(L.biz)] ?? [];
         if (replies.length) {
           $('replies').hidden = false;
           $('replies').replaceChildren(
@@ -378,6 +389,22 @@ function onEvent(e: CallEvent) {
     case 'user_response':
       settle(e.id, e.response.approved ? 'You approved.' : 'You declined.');
       line(e.t, 'sys', null, e.response.approved ? 'You approved.' : 'You declined.', 'muted');
+      break;
+    case 'escalated':
+      endHold(e.t);
+      line(e.t, 'esc-line', null, h('div', { class: 'escalation' }, h('b', {}, 'Escalated to a Voiced operator'), `${e.detail}. Stuck at “${e.step}”.`));
+      bot('A Voiced operator, a real person, is taking over the call. They see the call so far but not your card or account numbers.', `I got stuck at “${e.step}”.`);
+      break;
+    case 'operator':
+      if (e.state === 'joined') line(e.t, 'sys', null, `${e.operator} joined the call`, 'muted');
+      if (e.state === 'returned') {
+        line(e.t, 'sys', null, `${e.operator} handed the call back to Voiced${e.note ? `: ${e.note}` : ''}`, 'muted');
+        bot('The operator got past it and handed the call back. I saved what they did to the map, so next time I won’t need them.');
+      }
+      if (e.state === 'closed') line(e.t, 'sys', null, `${e.operator} closed the ticket${e.note ? `: ${e.note}` : ''}`, 'muted');
+      break;
+    case 'recording':
+      if (e.paused) $('tones').append(' · recording paused');
       break;
     case 'handoff':
       endHold(e.t);
@@ -461,7 +488,13 @@ function onTurn(e: Extract<CallEvent, { type: 'turn' }>) {
 function onAction(e: Extract<CallEvent, { type: 'action' }>) {
   const L = live!;
   const a = e.action;
-  const badge = e.source === 'map' ? h('span', { class: 'badge map' }, 'from map') : e.source === 'llm' ? h('span', { class: 'badge llm' }, 'Claude') : e.source === 'guard' ? h('span', { class: 'badge guard' }, 'guard') : null;
+  const badge =
+    e.source === 'map' ? h('span', { class: 'badge map' }, 'from map')
+    : e.source === 'llm' ? h('span', { class: 'badge llm' }, 'Claude')
+    : e.source === 'guard' ? h('span', { class: 'badge guard' }, 'guard')
+    : e.source === 'operator' ? h('span', { class: 'badge operator' }, 'human operator')
+    : null;
+  const who = e.source === 'operator' ? 'Operator' : 'Voiced';
   const s = L.screens.get(e.turn);
   if (a.type === 'wait') {
     if (e.reason !== L.lastWait && !/^Listening/.test(e.reason)) line(e.t, 'wait', null, `· ${e.reason}`, 'wait');
@@ -469,13 +502,13 @@ function onAction(e: Extract<CallEvent, { type: 'action' }>) {
     return;
   }
   L.lastWait = undefined;
-  L.lastWho = 'Voiced';
+  L.lastWho = who;
   if (a.type === 'press') {
     const redacted = /[^0-9*#w]/.test(e.display);
     const keys = redacted
       ? h('span', { class: 'vault' }, svg(LOCK), e.display)
       : h('span', { class: 'keys' }, ...e.display.split('').map((k) => h('span', { class: 'kc' }, k)));
-    line(e.t, 'act', 'Voiced', h('div', { class: 'act' }, keys, h('span', { class: 'reason' }, e.reason), badge));
+    line(e.t, 'act', who, h('div', { class: 'act' }, keys, h('span', { class: 'reason' }, e.reason), badge));
     animateKeys(e.display, redacted);
     if (s) {
       s.el.querySelectorAll('.opt').forEach((o) => o.classList.toggle('on', o.getAttribute('data-k') === e.display));
@@ -483,7 +516,7 @@ function onAction(e: Extract<CallEvent, { type: 'action' }>) {
       if (e.source === 'map') s.el.classList.add('known');
     }
   } else if (a.type === 'say') {
-    line(e.t, 'act', 'Voiced', h('div', { class: 'act' }, h('span', { class: 'said' }, `“${e.display}”`), h('span', { class: 'reason' }, e.reason), badge));
+    line(e.t, 'act', who, h('div', { class: 'act' }, h('span', { class: 'said' }, `“${e.display}”`), h('span', { class: 'reason' }, e.reason), badge));
     if (sound && speed <= 1) speak(e.display, 'agent');
     if (s) {
       s.el.querySelectorAll('.opt').forEach((o) => o.classList.toggle('on', o.getAttribute('data-k') === e.display.toLowerCase()));
@@ -525,7 +558,14 @@ function onRequest(id: string, r: UserRequest) {
   const detail = r.detail;
   const build = () => {
     const card = h('div', { class: 'row' });
-    if (r.kind === 'choose') {
+    if (r.kind === 'input') {
+      const input = h('input', { type: r.secret ? 'password' : 'text', inputmode: 'numeric', autocomplete: 'off', 'aria-label': r.factLabel ?? r.title, placeholder: r.factLabel ?? '' });
+      const send = h('button', { type: 'button', class: 'primary' }, r.secret ? 'Send to vault' : 'Send');
+      const none = h('button', { type: 'button', class: 'decline' }, 'I don’t have it');
+      send.addEventListener('click', () => input.value.trim() && answer(id, true, undefined, input.value.trim()));
+      none.addEventListener('click', () => answer(id, false));
+      card.append(input, send, none);
+    } else if (r.kind === 'choose') {
       for (const o of r.options) {
         const b = h('button', { type: 'button', class: 'primary' }, o);
         b.addEventListener('click', () => answer(id, true, o));
@@ -548,14 +588,15 @@ function onRequest(id: string, r: UserRequest) {
   toolcall('get_call', { call_id: 'call_…', wait_seconds: 30 });
 }
 
-function answer(id: string, approved: boolean, choice?: string) {
+function answer(id: string, approved: boolean, choice?: string, text?: string) {
   const L = live;
   if (!L) return;
   L.taps += 1;
   setTaps();
-  L.handle.respond(id, { approved, choice });
-  toolcall('respond_to_call', { request_id: '…', approved, ...(choice ? { choice } : {}) });
-  settle(id, approved ? 'You approved.' : 'You declined.');
+  L.handle.respond(id, { approved, choice, text });
+  if (text) toolcall('approval_url', { note: 'typed on Voiced, straight into the vault' });
+  else toolcall('respond_to_call', { request_id: '…', approved, ...(choice ? { choice } : {}) });
+  settle(id, text ? 'Sent to the vault.' : approved ? 'You approved.' : 'You declined.');
 }
 
 function settle(id: string, text: string) {
@@ -590,6 +631,7 @@ function finish(r: CallResult) {
   const prev = lastRun.get(L.biz.id);
   lastRun.set(L.biz.id, r);
   const ok = r.outcome === 'success';
+  const tone = r.resolution === 'ai' ? '' : r.resolution === 'human_assisted' ? ' assisted' : ' fail';
   const stat = (value: string, label: string, win = false) => h('div', { class: `stat${win ? ' win' : ''}` }, h('b', {}, value), h('span', {}, label));
   const saved = prev ? prev.callMs - r.callMs : 0;
   const again = h('button', { type: 'button', class: 'primary' }, ok ? 'Call again with the map' : 'Try again');
@@ -597,11 +639,19 @@ function finish(r: CallResult) {
   const back = h('button', { type: 'button', class: 'secondary' }, 'Choose another call');
   back.addEventListener('click', idle);
   const box = $('result');
-  box.className = `result${ok ? '' : ' fail'}`;
+  box.className = `result${tone}`;
+  const billable = r.result
+    ? h('p', { class: 'billable' }, h('b', {}, 'Billable result: '), [r.result.kind.replace(/_/g, ' '), r.result.amount, r.result.confirmation ? `#${r.result.confirmation}` : ''].filter(Boolean).join(' · '), r.result.evidence ? h('span', { class: 'evidence' }, ` (proof at ${clock(r.result.evidence.t)}: “${r.result.evidence.text}”)`) : '')
+    : h('p', { class: 'billable' }, h('b', {}, 'No charge: '), 'pricing is per result, and there wasn’t one.');
+  const broke = r.failure
+    ? h('p', { class: 'broke' }, h('b', {}, r.resolution === 'human_assisted' ? 'Where the AI needed help: ' : 'Where it broke: '), `“${r.failure.step}” · ${REASONS[r.failure.reason] ?? r.failure.reason}`)
+    : null;
   fill(
     box,
-    h('h3', {}, h('span', { class: 'dot' }), ok ? 'Done' : 'Stopped'),
+    h('h3', {}, h('span', { class: 'dot' }), RESOLUTION_LABELS[r.resolution]),
     h('p', {}, r.summary),
+    billable,
+    broke,
     prev && saved > 0
       ? h('p', { class: 'compare' }, 'Last call ', h('b', {}, formatDuration(prev.callMs)), ' → this call ', h('b', {}, formatDuration(r.callMs)), `. The map replayed ${r.mapHits} screens${r.llmCalls === 0 && prev.llmCalls > 0 ? '' : ''}, so Voiced skipped the listening.`)
       : null,
@@ -612,14 +662,14 @@ function finish(r: CallResult) {
       stat(`${L.taps} ${L.taps === 1 ? 'tap' : 'taps'}`, 'from you'),
       r.holdMs ? stat(formatDuration(r.holdMs), 'hold absorbed') : null,
       stat(String(r.mapHits), 'screens replayed', r.mapHits > 0),
-      stat(String(r.llmCalls), 'model calls'),
+      r.operatorTouches ? stat(String(r.operatorTouches), 'operator actions') : stat(String(r.llmCalls), 'model calls'),
     ),
     h('div', { class: 'row' }, again, back),
   );
   box.hidden = false;
   box.scrollIntoView({ block: 'nearest' });
   toolcall('get_call', { call_id: 'call_…' });
-  bot(r.summary, ok ? 'Done.' : 'Stopped.');
+  bot(r.summary, r.resolution === 'ai' ? 'Done.' : r.resolution === 'human_assisted' ? 'Done, with a person’s help.' : 'Not resolved.');
   void refreshNetwork(L.biz);
 }
 
@@ -661,11 +711,12 @@ function svg(markup: string) {
 async function refreshNetwork(fresh?: Business) {
   try {
     const [maps, stats] = await Promise.all([engine.maps(), engine.stats()]);
-    $('kpi-rate').textContent = stats.completionRate === null ? '–' : `${Math.round(stats.completionRate * 100)}%`;
+    const pctOf = (n: number | null) => (n === null ? '–' : `${Math.round(n * 100)}%`);
+    $('kpi-rate').textContent = pctOf(stats.aiRate);
+    $('kpi-human').textContent = pctOf(stats.humanRate);
     $('kpi-calls').textContent = String(stats.calls);
-    $('kpi-hold').textContent = `${stats.holdMinutes}m`;
     $('net-rows').replaceChildren(
-      ...businesses.map((b) => {
+      ...businesses.filter((b) => !b.hard || maps.some((x) => digits(x.phone) === digits(b.phone) && x.screens > 0) || fresh?.id === b.id).filter((b, i, all) => all.findIndex((x) => digits(x.phone) === digits(b.phone)) === i).map((b) => {
         const m = maps.find((x) => digits(x.phone) === digits(b.phone));
         const screens = m?.screens ?? 0;
         const isFresh = fresh?.id === b.id && live && screens > live.mapBefore;

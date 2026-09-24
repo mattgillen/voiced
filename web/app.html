@@ -62,6 +62,11 @@
           <span class="label">More calls to hand off</span>
           <div class="task-list" id="task-list"></div>
         </div>
+        <div class="more">
+          <span class="label">Hard cases: AI with human backup</span>
+          <p class="note">When the AI gets stuck, a Voiced operator steps in, and every call says who resolved it. What the operator does gets learned, so the next call doesn’t need them.</p>
+          <div class="task-list" id="hard-list"></div>
+        </div>
       </div>
 
       <div id="call-live" class="live" hidden>
@@ -105,9 +110,9 @@
         <h3>Shared map</h3>
         <p class="note">Every call, from any user, teaches Voiced the tree. The next caller skips the listening.</p>
         <div class="kpis">
-          <div><span class="kpi" id="kpi-rate">–</span><span class="kpi-label">completion rate</span></div>
+          <div><span class="kpi" id="kpi-rate">–</span><span class="kpi-label">resolved by AI</span></div>
+          <div><span class="kpi" id="kpi-human">–</span><span class="kpi-label">with human help</span></div>
           <div><span class="kpi" id="kpi-calls">0</span><span class="kpi-label">calls</span></div>
-          <div><span class="kpi" id="kpi-hold">0m</span><span class="kpi-label">hold absorbed</span></div>
         </div>
         <div class="table-wrap">
           <table>
@@ -119,7 +124,7 @@
       </div>
     </section>
   </main>
-  <footer class="foot">Demo with simulated phone trees. Businesses, people and numbers are fictional (555-01xx); cards are public test numbers.</footer>
+  <footer class="foot">Demo with simulated phone trees and a simulated operator. Businesses, people and numbers are fictional (555-01xx); cards are public test numbers. Voiced is AI with human backup, and every call reports whether a person helped.</footer>
 </div>
 
 <div class="backdrop" id="sheet" hidden>

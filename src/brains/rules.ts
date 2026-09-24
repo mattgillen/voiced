@@ -384,7 +384,8 @@ function talkToHuman(s: BrainState): Decision {
       ? `Hi${rep ? ` ${rep}` : ''}, I'm Voiced, an AI assistant calling on behalf of the account holder, ${task.user.name}.`
       : `Hi${rep ? ` ${rep}` : ''}, I'm calling on behalf of ${task.user.name}.`;
     const ask = task.policy.handoffToUser ? ` ${first} is standing by. Can I connect them to you now?` : '';
-    return say(`${intro} ${first} ${task.purpose}.${ask}`, 'Disclosing that I’m an AI, stating the purpose, offering a handoff', false, notes);
+    const recorded = task.policy.recorded ? ' This call is being recorded.' : '';
+    return say(`${intro}${recorded} ${first} ${task.purpose}.${ask}`, 'Disclosing that I’m an AI, stating the purpose, offering a handoff', false, notes);
   }
 
   if (/\b(?:social security|ssn|last four|date of birth|security question|pin|passcode|verify)\b/i.test(text)) {

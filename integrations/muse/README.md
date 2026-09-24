@@ -24,7 +24,7 @@ Directory connectors go through a three-step review: functional, security and le
 
 **Short description:** Voiced makes phone calls to businesses for you: phone trees, bill payments, cancellations and hold queues.
 
-**Long description:** Ask Muse to pay a bill, cancel a membership or reach a person at a company that only helps by phone. Voiced calls, gets through the phone tree, enters your account details from a secure vault (Muse never sees your card number or PIN), pays within the limit you approve, waits on hold, and connects you when a person picks up. Every call starts with Voiced identifying itself as an AI assistant. Anything that costs more than you approved comes back to you first.
+**Long description:** Ask Muse to pay a bill, cancel a membership or reach a person at a company that only helps by phone. Voiced calls, gets through the phone tree, enters your account details from a secure vault (Muse never sees your card number or PIN), pays within the limit you approve, waits on hold, and connects you when a person picks up. Every call starts with Voiced identifying itself as an AI assistant. Anything that costs more than you approved comes back to you first. If the AI gets stuck, a Voiced operator steps in, and Voiced tells you when a person helped.
 
 **Example prompts:**
 - "Pay my Bedford utilities bill, up to $200."
@@ -39,9 +39,10 @@ Directory connectors go through a three-step review: functional, security and le
 - Money moves only within a user-set cap; unapproved fees and amounts return to the user as a `pending_request` with a hosted `approval_url`.
 - Tool descriptions tell the agent never to approve on the user's behalf.
 - Voiced discloses it is an AI to every person it speaks with, and never reads secrets aloud to a person.
+- AI with human backup: stuck calls go to a Voiced operator, who sees redacted context only. Every call reports `resolution` (`ai`, `human_assisted` or `failed`) so users and Meta can see when a person helped.
 - Card data, PINs and account numbers never enter model context or transcripts. CVVs are wiped when the call ends.
 
-**Data handling:** Voiced keeps business-side phone-tree structure (menus and which options work) to make future calls faster. It does not store the user's conversation with a live representative; processing stops at handoff. Call records keep outcome, duration and redacted transcript.
+**Data handling:** Voiced keeps business-side phone-tree structure (menus and which options work) to make future calls faster. It does not store the user's conversation with a live representative; processing stops at handoff. Call records keep outcome, duration and redacted transcript. Operators see the redacted transcript and placeholders, never card numbers, PINs or account numbers.
 
 **Reviewer test plan** (runs against the simulated directory, no real calls or charges):
 1. Connect the connector; approve the consent screen.

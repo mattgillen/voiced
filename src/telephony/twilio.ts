@@ -129,6 +129,8 @@ export class TwilioLine implements Line {
   private handedOff = false;
   private connected?: () => void;
   private accepted?: (ok: boolean) => void;
+  /** Record the business leg (VOICED_RECORD=1). Recording pauses while vault digits are keyed. */
+  private recorded = process.env.VOICED_RECORD === '1';
 
   constructor(
     private hub: RelayHub,
@@ -167,6 +169,7 @@ export class TwilioLine implements Line {
       StatusCallback: `${base}/twilio/status?job=${this.job}`,
       StatusCallbackEvent: 'completed',
       TimeLimit: String(3 * 3600),
+      ...(this.recorded ? { Record: 'true' } : {}),
     });
     this.callSid = String(call.sid);
     this.started = Date.now();
@@ -248,6 +251,14 @@ export class TwilioLine implements Line {
     this.send({ type: 'text', token: 'Connecting them now. Thank you!', last: true, interruptible: false });
     await new Promise((r) => setTimeout(r, 2200));
     this.send({ type: 'end', handoffData: JSON.stringify({ room: this.room }) });
+  }
+
+  /** PCI: pause the recording while card or account digits are keyed (UNVERIFIED on a live account). */
+  async setRecording(on: boolean): Promise<void> {
+    if (!this.recorded || !this.callSid || this.ended) return;
+    await this.hub
+      .rest(`/Calls/${this.callSid}/Recordings/Twilio.CURRENT.json`, on ? { Status: 'in-progress' } : { Status: 'paused', PauseBehavior: 'skip' })
+      .catch((err) => console.warn(`[twilio ${this.job}] recording ${on ? 'resume' : 'pause'} failed`, err));
   }
 
   async hangup(): Promise<void> {

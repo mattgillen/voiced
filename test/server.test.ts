@@ -17,7 +17,7 @@ let base = '';
 
 before(async () => {
   server = spawn(process.execPath, ['--import', 'tsx', 'src/server/index.ts'], {
-    env: { ...process.env, PORT: '0', VOICED_API_KEY: KEY, VOICED_DATA: mkdtempSync(join(tmpdir(), 'voiced-')), VOICED_BRAIN: 'rules', ANTHROPIC_API_KEY: '' },
+    env: { ...process.env, PORT: '0', VOICED_API_KEY: KEY, VOICED_DATA: mkdtempSync(join(tmpdir(), 'voiced-')), VOICED_BRAIN: 'rules', ANTHROPIC_API_KEY: '', VOICED_OPERATOR_DELAY_MS: '0' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   base = await new Promise<string>((resolve, reject) => {
@@ -68,9 +68,35 @@ test('REST: pay a bill, pause on the fee, approve, finish', async () => {
   assert.equal((await api(`/v1/calls/${started.id}?t=${token}`, { key: null })).status, 200);
   assert.equal((await api(`/v1/calls/${started.id}?t=wrong`, { key: null })).status, 401);
 
+  assert.equal(call.resolution, 'ai');
+  assert.equal(call.result.kind, 'bill_paid');
+  assert.equal(call.result.amount, '$145.12');
+
   const stats = await (await api('/v1/stats')).json();
   assert.equal(stats.calls, 1);
+  assert.equal(stats.ai_resolution_rate, 1);
   assert.equal(stats.completion_rate, 1);
+});
+
+test('a stuck call escalates to the operator queue and reports human help honestly', async () => {
+  const started = await (await api('/v1/calls', { method: 'POST', body: JSON.stringify({ business_id: 'irontemple-loop', speed: 200 }) })).json();
+  let call = started;
+  for (let i = 0; i < 6 && call.status !== 'ended'; i++) call = await (await api(`/v1/calls/${started.id}?wait=20`)).json();
+  assert.equal(call.resolution, 'human_assisted');
+  assert.equal(call.failure.reason, 'loop');
+  assert.equal(call.escalation.status, 'returned');
+  assert.ok(call.transcript.some((l: { who: string }) => l.who === 'operator'));
+
+  // The operator queue is its own credential, not the developer API key.
+  assert.equal((await api('/v1/operator/tickets')).status, 401);
+  const tickets = await (await api('/v1/operator/tickets', { key: 'vo_demo_local' })).json();
+  const ticket = tickets.find((t: { callId: string }) => t.callId === started.id);
+  assert.equal(ticket.reason, 'loop');
+  assert.ok(ticket.transcript.length > 5, 'the operator gets the call so far');
+
+  const stats = await (await api('/v1/stats')).json();
+  assert.equal(stats.resolved_with_human, 1);
+  assert.equal(stats.exceptions_by_reason.loop, 1);
 });
 
 test('OAuth 2.1 + PKCE connector flow, then MCP tools over streamable HTTP', async () => {

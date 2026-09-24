@@ -4,7 +4,7 @@
 
 AI agents can browse, email and check out. They still can't get through a phone tree. Voiced is the connector that lets an agent pay the utility bill, cancel the gym, dispute the charge or reach a human by phone: it navigates the IVR, keys account details from a vault the model never sees, waits on hold, and hands the user a briefed human when one is needed.
 
-Go-to-market: a **Muse connector**, free for consumers and funded by venture capital. The long-term asset is a **shared map of the world's phone trees**, measured by one number: **call completion rate**. The exit is an acquisition by a frontier lab or agent platform that needs the last mile and can't rebuild the map overnight.
+Go-to-market: a **Muse connector**, free for consumers and funded by venture capital. The long-term asset is a **shared map of the world's phone trees**, measured by one number: **the share of calls resolved by AI with no human** (with completion rate beside it). The exit is an acquisition by a frontier lab or agent platform that needs the last mile and can't rebuild the map overnight.
 
 *Draft, September 2026. Figures with a source link were found through web search in September 2026 (most source pages could not be opened directly from our research environment, so spot-check them before sending). Figures marked **assumption** are placeholders to replace with sourced data.*
 
@@ -23,13 +23,13 @@ That's the easy call. The hard one is 40 minutes of hold music to cancel somethi
 
 1. **Muse opened to connectors on September 18.** Developers can submit connectors at muse.ai/platform; Meta reviews them for functional, security and legal requirements, runs end-to-end tests, and lists approved ones in a directory, with Stripe Link for payments ([Social Media Today](https://www.socialmediatoday.com/news/meta-expands-muse-agent-connections-launches-muse-for-mac/830852/), [CryptoBriefing](https://cryptobriefing.com/meta-muse-developer-connector-api-access/)).
 2. **Muse and Instinct both added calling** in September ([TechCrunch](https://techcrunch.com/2026/09/17/rival-ai-agents-instinct-and-metas-muse-both-add-the-ability-to-make-calls/)).
-3. **Businesses hang up on the AI.** Meta quietly had human contractors place some Muse calls, which reportedly lifted success to **95–98%**, then rolled the test back over privacy concerns and a contractor's racist remark ([Reuters via BNN Bloomberg](https://www.bnnbloomberg.ca/business/artificial-intelligence/2026/09/22/meta-testing-a-human-concierge-for-its-new-personal-ai-agent-muse-reuters-exclusive/), [PYMNTS](https://www.pymnts.com/news/artificial-intelligence/2026/meta-tests-human-callers-for-muse-after-merchants-hang-up-on-ai/)). That is the gap: the platforms need a reliable, non-human way to finish phone tasks.
+3. **Businesses hang up on the AI.** Meta quietly had human contractors place some Muse calls, which reportedly lifted success to **95–98%**, then rolled the test back over privacy concerns and a contractor's racist remark ([Reuters via BNN Bloomberg](https://www.bnnbloomberg.ca/business/artificial-intelligence/2026/09/22/meta-testing-a-human-concierge-for-its-new-personal-ai-agent-muse-reuters-exclusive/), [PYMNTS](https://www.pymnts.com/news/artificial-intelligence/2026/meta-tests-human-callers-for-muse-after-merchants-hang-up-on-ai/)). That is the gap: the platforms need a reliable way to finish phone tasks, with humans only where they're disclosed and needed.
 4. **Customers already bring their own AI.** They are **~3x** more likely to use third-party GenAI than a company's chatbot for service ([Gartner, Jul 2026](https://www.gartner.com/en/newsroom/press-releases/2026-07-08-gartner-survey-finds-customers-are-three-times-more-likely-to-use-third-party-genai-than-company-provided-chatbots-for-customer-service)), and **87%** still want a path to a human ([Gartner, Aug 2026](https://www.gartner.com/en/newsroom/press-releases/2026-08-04-gartner-survey-finds-87-percent-of-customers-say-companies-using-genai-for-customer-service-must-provide-access-to-a-human-agent0)).
 5. **Voice infrastructure is a commodity.** Vapi reports **1B+** calls handled ([GlobeNewswire](https://www.globenewswire.com/news-release/2026/05/12/3292882/0/en/vapi-raises-50m-series-b-as-it-reaches-1-billion-calls-powering-the-next-generation-of-enterprise-voice-ai.html)). What's scarce is reliability at a specific company's phone tree.
 
 ## The insight
 
-**Let the AI talk to machines, and put humans with humans.** Phone trees are machines: static, shared and indifferent to who's calling, so an agent can get through them reliably. Live reps are where AI callers get hung up on. Voiced does everything up to the human, then briefs the rep and hands the call to the user. It skips both the hang-up problem and the human-contractor problem.
+**AI-first, with a human fallback, and honest about which is which.** Phone trees are machines: static, shared and indifferent to who's calling, so an agent can get through most of them. Live reps are where AI callers get hung up on, so Voiced briefs the rep and hands the call to the user. For the 10–20% of calls where the AI gets stuck (dead ends, loops, identity checks it can't pass), a Voiced operator steps in with the full context. Pure human doesn't scale, and pure AI loses customers on those calls. Two differences from Meta's quiet contractor test: operators are disclosed (every call reports whether a person helped), and they work through the vault, so they never see card numbers or PINs. What an operator fixes on a phone tree is learned into the map, so **every exception makes the next call AI-only**. In the simulator, a looping menu needs an operator on the first call and nobody on the second.
 
 **Phone trees are shared, so a map of them compounds.** Every agent today rediscovers each tree live, with a model listening to every prompt. Voiced remembers the tree (prompt fingerprint → option → outcome). The next call to that number, from any user on any agent, skips the listening: faster, cheaper, more reliable. The map is a cache with a network effect, and it is the asset.
 
@@ -51,6 +51,9 @@ A working end-to-end demo, not a mockup:
 - **The shared IVR map**: learns every tree it navigates and replays known screens on the next call with barge-in. On the simulated utility line, the second call is 30 seconds shorter with 9 screens replayed and zero model calls. Built only from automated prompts and keypresses, never from human speech.
 - **The vault**: the model emits `{{card.number}}`, and the runtime fills in the digits at the last moment. Transcripts are redacted, and the CVV is wiped at hangup. Tests assert that no secret appears in any event.
 - **Policy in code**: money beyond the pre-approval and unapproved fees always come back to the user, even if the model tries to press "1".
+- **Human fallback as a state**: stuck calls go to an operator queue with full context instead of failing. Operator actions are learned into the map, and loop detection runs in code.
+- **An auditable outcome on every call**: resolved by AI, with human help, or failed, plus the reason, the step where it broke, and the billable result with the exact line on the call that proves it.
+- **Eval harness**: the simulator replays the demo trees plus hard cases (a looping menu, an identity check, payments offline, a reshuffled menu, a closed queue). With the rules brain, 18 of 18 calls match their expected outcome: 72% resolved by AI, 6% with human help, 22% failed, and every failure is a closure nobody could finish by phone.
 - **Live handoff**: disclose AI, brief the rep, bridge the user in.
 - **The connector surfaces**: REST + OpenAPI, remote MCP with OAuth 2.1 (dynamic registration + PKCE), stdio MCP, hosted approval links.
 - **Brains**: a deterministic rules navigator (100% completion on the four simulated trees) and a Claude navigator, with the rules as fallback.
@@ -75,7 +78,7 @@ Running STT/TTS ourselves instead of ConversationRelay (Deepgram at ~$0.0077/min
 
 | Line | Hypothesis |
 |---|---|
-| Developer API | $0.50–$1.00 per **completed** call. Failed calls are free, so pricing tracks the headline metric. |
+| Developer API | $0.50–$1.00 **per result** (bill paid, cancellation confirmed, table booked, human reached). Every call carries an auditable result record with the confirmation and the line that proves it; calls without a result are free. |
 | Platform deals | Per-call or rev-share with agent platforms that want Voiced built in. |
 | Consumer | Free. A paid tier ($5–10/mo) stays an option if the exit path changes. |
 | Agent Gateway | Enterprise platform + per-session fees, priced below a human-handled call (median CSR wage $20.59/hr, [BLS](https://www.bls.gov/ooh/office-and-administrative-support/customer-service-representatives.htm)). |
@@ -124,11 +127,12 @@ The buyers are the companies whose agents need the last mile: Meta (Muse), OpenA
 - **Businesses block bots.** *Mitigation:* disclose honestly, never impersonate, hand humans to humans, track hang-up-on-AI rate weekly, and offer the Gateway as a sanctioned lane.
 - **PCI.** No CVV retention after authorization ([PCI SSC](https://blog.pcisecuritystandards.org/faq-can-cvc-be-stored-for-card-on-file-or-recurring-transactions)). *Mitigation:* a tokenizing vault provider; card data kept out of logs and model context (tested).
 - **Hallucinated actions.** *Mitigation:* the policy guard in code, approval gates, and a receipt after every call.
+- **Humans behind the "AI" (AI-washing).** The SEC settled with Presto Automation in January 2025 after it sold a drive-thru "AI" that needed human intervention on over 70% of orders ([SEC](https://www.sec.gov/enforcement-litigation/administrative-proceedings/33-11352-s)). *Mitigation:* market it as AI with human backup, never as fully automated; every call reports `resolution`, and stats publish the AI-only rate separately from human-assisted.
 - **Founder conflict.** Review the employment and IP agreement; build clean-room, with none of the employer's data or code.
 
 ## Metrics
 
-- **Headline: call completion rate**, overall and per phone tree. Every other number explains it.
+- **Top line: share of calls resolved by AI with no human**, overall and per phone tree. Completion rate (AI + human-assisted) sits beside it; every exception is logged with its reason and step.
 - **Moat:** trees mapped, share of call volume on mapped trees, map-hit rate, % of calls with no model navigation, map drift (screens that changed).
 - **Speed and cost:** time to target, time to human, cost per **completed** call.
 - **Trust:** secret exposures and unapproved money movements (target: zero), hang-up-on-AI rate.
@@ -137,15 +141,15 @@ The buyers are the companies whose agents need the last mile: Meta (Muse), OpenA
 ## The YC plan
 
 - **This week:** launch the demo video (recorded from this repo: `demo/voiced-demo.mp4`). Submit the Muse connector.
-- **Next 30 days:** **hand-map the top 50 IVRs** (utilities, telcos, cable, insurers, gyms; `maps/` is the seed format); first real calls on Twilio; counsel memo on TCPA/CIPA.
+- **Next 30 days:** pick **one wedge: utility bill pay** (frequent, authenticated, structured trees, and the founder's own pain). **Hand-map the top 50 utility IVRs** (`maps/` is the seed format); first real calls on Twilio with an operator on call; counsel memo on TCPA/CIPA.
 - **Next 90 days:** **10 developers building agents that make real calls** through Voiced; Muse directory listing live; completion rate published per tree; 1,000 completed calls a week.
 
 ## YC short answers
 
-**What are you making?** The phone layer for AI agents. Agents like Muse call Voiced when a task needs a phone call: it gets through the phone tree, enters account details from a vault the model never sees, pays with the user's approval, waits on hold, and hands the user a briefed human.
+**What are you making?** The phone layer for AI agents. Agents like Muse call Voiced when a task needs a phone call: it gets through the phone tree, enters account details from a vault the model never sees, pays with the user's approval, waits on hold, and hands the user a briefed human. It's AI with human backup: when the AI gets stuck, a Voiced operator steps in, and every call reports which happened.
 
 **Why you?** I work on the enterprise IVR side. I know how the trees are designed, why they change, what contact centers fear about bots, and what they would buy. That's both sides of the protocol.
 
 **What's the insight?** Phone trees are machines, and machines are the part an AI can reliably handle. And because trees are shared, a map of them compounds: every call from every user makes the next one faster and cheaper.
 
-**How will you make money?** Consumers are free. Developers pay per completed call; platforms pay for built-in access; enterprises pay for the Gateway. The endgame is being acquired by the agent platform that needs the last mile most.
+**How will you make money?** Consumers are free. Developers pay per result (bill paid, cancellation confirmed); platforms pay for built-in access; enterprises pay for the Gateway. The endgame is being acquired by the agent platform that needs the last mile most.

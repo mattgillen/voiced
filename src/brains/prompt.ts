@@ -41,6 +41,7 @@ export function renderContext(s: BrainState): string {
     `DECLINE RETENTION OFFERS: ${task.policy.declineRetentionOffers ? 'yes' : 'no'}`,
     `HAND OFF TO USER WHEN A HUMAN ANSWERS: ${task.policy.handoffToUser ? 'yes' : 'no'}`,
     `DISCLOSE YOU ARE AN AI TO HUMANS: ${task.policy.discloseAI ? 'yes' : 'no'}`,
+    `CALL IS RECORDED (tell any person you speak to): ${task.policy.recorded ? 'yes' : 'no'}`,
   ];
   if (task.prefs?.timeWindow) {
     lines.push(`ACCEPTABLE TIME WINDOW: ${formatTime(task.prefs.timeWindow[0])} to ${formatTime(task.prefs.timeWindow[1])}`);

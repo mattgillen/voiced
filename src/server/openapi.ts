@@ -12,7 +12,7 @@ export function openapi(base: string) {
       title: 'Voiced',
       version: '0.1.0',
       description:
-        'The phone layer for AI agents. Voiced calls businesses for your user and handles the phone tree (IVR menus, account lookups, bill payments, cancellations, reservations, hold queues), then hands live humans to the user. Card numbers and PINs stay in the Voiced vault; the agent never sees them. This demo build runs simulated phone trees.',
+        'The phone layer for AI agents. Voiced calls businesses for your user and handles the phone tree (IVR menus, account lookups, bill payments, cancellations, reservations, hold queues), then hands live humans to the user. AI with human backup: when the AI gets stuck, a Voiced operator steps in, and every call reports whether it was resolved by AI, with human help, or not at all. Card numbers and PINs stay in the Voiced vault; neither the agent nor operators see them. This demo build runs simulated phone trees.',
     },
     servers: [{ url: base }],
     security: [{ bearer: [] }, { oauth: ['calls'] }],
@@ -92,7 +92,7 @@ export function openapi(base: string) {
         post: { operationId: 'hangUp', summary: 'End a call now', parameters: [callId], responses: ok(call) },
       },
       '/v1/stats': {
-        get: { operationId: 'getStats', summary: 'Completion rate and IVR map coverage', responses: ok({ type: 'object' }) },
+        get: { operationId: 'getStats', summary: 'Share of calls resolved by AI (the top-line metric), with human help, or failed; exceptions by reason; map coverage', responses: ok({ type: 'object' }) },
       },
     },
     components: {
@@ -128,12 +128,12 @@ export function openapi(base: string) {
             id: { type: 'string' },
             business: { type: 'string' },
             task: { type: 'string' },
-            status: { type: 'string', enum: ['dialing', 'navigating', 'on_hold', 'talking_to_human', 'awaiting_user', 'handing_off', 'user_connected', 'ended'] },
+            status: { type: 'string', enum: ['dialing', 'navigating', 'on_hold', 'talking_to_human', 'awaiting_user', 'with_operator', 'handing_off', 'user_connected', 'ended'] },
             pending_request: {
               type: ['object', 'null'],
               properties: {
                 id: { type: 'string' },
-                kind: { type: 'string', enum: ['approve_payment', 'approve', 'choose', 'input'] },
+                kind: { type: 'string', enum: ['approve_payment', 'approve', 'choose', 'input'], description: 'input: the business asked for something not on file (e.g. an identity check). Collect it on approval_url so it goes straight to the vault.' },
                 title: { type: 'string' },
                 detail: { type: 'string' },
                 amount: { type: 'number' },
@@ -144,6 +144,27 @@ export function openapi(base: string) {
               },
             },
             outcome: { type: ['string', 'null'], enum: ['success', 'failure', null] },
+            resolution: { type: ['string', 'null'], enum: ['ai', 'human_assisted', 'failed', null], description: 'Who resolved it: the AI alone, the AI with a Voiced operator, or nobody.' },
+            result: {
+              type: ['object', 'null'],
+              description: 'The billable result, with the line on the call that proves it.',
+              properties: {
+                kind: { type: 'string', enum: ['bill_paid', 'membership_canceled', 'reservation_booked', 'human_reached'] },
+                confirmation: { type: 'string' },
+                amount: { type: 'string' },
+                evidence: { type: 'object', properties: { t: { type: 'number' }, text: { type: 'string' } } },
+              },
+            },
+            failure: {
+              type: ['object', 'null'],
+              description: 'Why and where it broke. Also present when an operator rescued the call.',
+              properties: {
+                reason: { type: 'string', enum: ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'hung_up', 'user_declined', 'timeout', 'unresolved'] },
+                detail: { type: 'string' },
+                step: { type: 'string' },
+              },
+            },
+            escalation: { type: ['object', 'null'], description: 'Set when the call went to a Voiced operator.' },
             summary: { type: ['string', 'null'] },
             notes: { type: 'object', additionalProperties: { type: 'string' } },
             metrics: { type: ['object', 'null'] },

@@ -1,20 +1,22 @@
 // CallManager owns every live call on this server: it starts sessions on the
 // simulator (or a real telephony line), keeps their event streams, exposes
-// agent-friendly views of them, and tracks the headline metric: completion rate.
+// agent-friendly views of them, routes stuck calls to the operator queue, and
+// tracks the top-line metric: the share of calls resolved by AI with no human.
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Brain } from '../brains/brain.js';
 import { RulesBrain } from '../brains/rules.js';
-import type { MapMemory } from '../core/memory.js';
+import { phoneKey, type MapMemory } from '../core/memory.js';
+import type { OperatorQueue } from '../core/operators.js';
 import { money } from '../core/parse.js';
 import { CallSession } from '../core/session.js';
 import { buildCustomTask, type CustomTaskInput } from '../core/tasks.js';
-import type { CallEvent, CallResult, Line, Task, UserRequest } from '../core/types.js';
+import type { CallEvent, CallResult, FailureReason, Line, Resolution, ResultKind, Task, UserRequest } from '../core/types.js';
 import { Vault } from '../core/vault.js';
 import { PacedClock, SimLine } from '../sim/engine.js';
-import { getScenario, scenarios } from '../sim/scenarios/index.js';
+import { allScenarios, getScenario } from '../sim/scenarios/index.js';
 
 export interface StartCallInput {
   /** A business from the directory (simulated phone trees in this build). */
@@ -53,6 +55,14 @@ export interface CallManagerOptions {
   logPath?: string;
   /** Opens a real phone line. Undefined when no provider is configured. */
   realLine?: (task: Task) => Line;
+  /** Human fallback for stuck calls. */
+  operators?: OperatorQueue;
+  /**
+   * TCPA line: Voiced calls businesses for users, never consumers. Real calls
+   * go only to allowlisted business lines or ones the caller attests are
+   * business service lines, and never to the user's own number.
+   */
+  dialPolicy?: { allowed: string[]; userPhone?: string };
 }
 
 interface CallRecord {
@@ -60,6 +70,12 @@ interface CallRecord {
   business: string;
   kind: string;
   outcome: 'success' | 'failure';
+  resolution?: Resolution;
+  resultKind?: ResultKind;
+  failureReason?: FailureReason;
+  failureStep?: string;
+  operatorTouches?: number;
+  escalations?: number;
   callMs: number;
   holdMs: number;
   mapHits: number;
@@ -93,8 +109,12 @@ export class CallManager {
     return this.opts.memory;
   }
 
+  get operators() {
+    return this.opts.operators;
+  }
+
   directory() {
-    return scenarios.map((s) => {
+    return allScenarios.map((s) => {
       const map = this.opts.memory.get(s.phone);
       const recs = this.records.filter((r) => r.business === s.business);
       return {
@@ -104,9 +124,11 @@ export class CallManager {
         category: s.category,
         example_task: s.title,
         simulated: true,
+        hard_case: s.hard ?? false,
         map: {
           screens: map?.screens.length ?? 0,
           calls: map?.calls ?? 0,
+          ai_resolution_rate: recs.length ? round(recs.filter((r) => resolutionOf(r) === 'ai').length / recs.length) : null,
           completion_rate: recs.length ? round(recs.filter((r) => r.outcome === 'success').length / recs.length) : null,
         },
       };
@@ -121,7 +143,9 @@ export class CallManager {
     let businessId: string | undefined;
     if (input.custom) {
       if (!this.opts.realLine) throw new HttpError(400, 'Real calls need a telephony provider (set TWILIO_* env vars). Use business_id for the simulated directory.');
+      this.checkDialPolicy(input.custom);
       ({ task, secrets } = buildCustomTask(input.custom));
+      task.policy.recorded = process.env.VOICED_RECORD === '1';
       line = this.opts.realLine(task);
     } else {
       const scenario = getScenario(input.business_id ?? '');
@@ -142,6 +166,7 @@ export class CallManager {
       fallback: new RulesBrain(),
       memory: this.opts.memory,
       vault: new Vault(task.facts, secrets),
+      operators: this.opts.operators,
     });
     const call: ManagedCall = {
       id,
@@ -197,12 +222,36 @@ export class CallManager {
       created_at: new Date(call.createdAt).toISOString(),
       pending_request: pending ? this.requestView(call, pending.id, pending.request) : null,
       outcome: r?.outcome ?? null,
+      resolution: r?.resolution ?? null,
+      result: r?.result ?? null,
+      failure: r?.failure ?? null,
+      escalation: this.escalationView(call),
       summary: r?.summary ?? null,
       notes: s.notes,
       metrics: r ? metrics(r) : null,
       transcript: transcript(s.events, opts.transcript ?? 12),
       watch_url: `${this.opts.baseUrl}/?call=${call.id}&t=${call.token}`,
     };
+  }
+
+  private escalationView(call: ManagedCall) {
+    const ticket = this.opts.operators?.list().filter((t) => t.callId === call.id).pop();
+    return ticket ? { ticket_id: ticket.id, status: ticket.status, reason: ticket.reason, step: ticket.step, operator: ticket.operator ?? null } : null;
+  }
+
+  private checkDialPolicy(custom: CustomTaskInput & { business_line_attested?: boolean }) {
+    const to = phoneKey(custom.to);
+    const policy = this.opts.dialPolicy ?? { allowed: [] };
+    if (policy.userPhone && phoneKey(policy.userPhone) === to) {
+      throw new HttpError(403, 'Voiced calls businesses, not people: the user is only dialed to take a handoff.');
+    }
+    const allowed = policy.allowed.map(phoneKey).includes(to) || allScenarios.some((s) => phoneKey(s.phone) === to);
+    if (!allowed && custom.business_line_attested !== true) {
+      throw new HttpError(
+        403,
+        'Real calls go only to business service lines. Add the number to VOICED_ALLOWED_NUMBERS, or set custom.business_line_attested: true to attest it is a business line (AI calls to consumers need prior consent under the TCPA).',
+      );
+    }
   }
 
   private requestView(call: ManagedCall, id: string, request: UserRequest) {
@@ -222,11 +271,23 @@ export class CallManager {
   stats() {
     const recs = this.records;
     const done = recs.filter((r) => r.outcome === 'success');
+    const byResolution = (x: Resolution) => recs.filter((r) => resolutionOf(r) === x).length;
+    const rate = (n: number) => (recs.length ? round(n / recs.length) : null);
     const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
+    const reasons: Record<string, number> = {};
+    for (const r of recs) if (r.outcome === 'failure' || r.failureReason) reasons[r.failureReason ?? 'unknown'] = (reasons[r.failureReason ?? 'unknown'] ?? 0) + 1;
     return {
       calls: recs.length,
+      ai_resolution_rate: rate(byResolution('ai')),
+      human_assisted_rate: rate(byResolution('human_assisted')),
+      failed_rate: rate(byResolution('failed')),
+      resolved_by_ai: byResolution('ai'),
+      resolved_with_human: byResolution('human_assisted'),
+      failed: byResolution('failed'),
+      exceptions_by_reason: reasons,
+      open_escalations: this.opts.operators?.list('waiting').length ?? 0,
       completed: done.length,
-      completion_rate: recs.length ? round(done.length / recs.length) : null,
+      completion_rate: rate(done.length),
       avg_call_seconds: Math.round(avg(recs.map((r) => r.callMs)) / 1000),
       hold_minutes_absorbed: Math.round(recs.reduce((a, r) => a + r.holdMs, 0) / 60_000),
       map_hits: recs.reduce((a, r) => a + r.mapHits, 0),
@@ -245,6 +306,12 @@ export class CallManager {
       business: call.task.business,
       kind: call.task.kind,
       outcome: r.outcome,
+      resolution: r.resolution,
+      resultKind: r.result?.kind,
+      failureReason: r.failure?.reason,
+      failureStep: r.failure?.step,
+      operatorTouches: r.operatorTouches,
+      escalations: r.escalations,
       callMs: r.callMs,
       holdMs: r.holdMs,
       mapHits: r.mapHits,
@@ -270,11 +337,18 @@ export class HttpError extends Error {
   }
 }
 
+/** Older log lines predate resolutions: a success then meant the AI did it alone. */
+function resolutionOf(r: CallRecord): Resolution {
+  return r.resolution ?? (r.outcome === 'success' ? 'ai' : 'failed');
+}
+
 export function metrics(r: CallResult) {
   return {
     call_seconds: Math.round(r.callMs / 1000),
     hold_seconds: Math.round(r.holdMs / 1000),
     user_touches: r.userTouches,
+    operator_touches: r.operatorTouches,
+    escalations: r.escalations,
     map_hits: r.mapHits,
     model_calls: r.llmCalls,
   };
@@ -287,6 +361,8 @@ function transcript(events: CallEvent[], n: number) {
     else if (e.type === 'action' && e.action.type !== 'wait') lines.push({ t: s(e.t), who: 'voiced', text: e.action.type === 'press' ? `[pressed ${e.display}]` : e.display });
     // After handoff the conversation belongs to the user; Voiced doesn't keep it.
     else if (e.type === 'user_response') lines.push({ t: s(e.t), who: 'you', text: e.response.approved ? '[approved]' : '[declined]' });
+    else if (e.type === 'escalated') lines.push({ t: s(e.t), who: 'system', text: `[escalated to a Voiced operator: ${e.detail}]` });
+    else if (e.type === 'operator') lines.push({ t: s(e.t), who: 'operator', text: `[${e.operator} ${e.state}${e.note ? `: ${e.note}` : ''}]` });
   }
   return lines.slice(-n);
 }

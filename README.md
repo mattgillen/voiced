@@ -3,21 +3,23 @@
 **The phone layer for AI agents.** Your agent says "pay my Bedford utilities bill." Voiced makes the call: it gets through the phone tree, keys the account and card from a vault the model never sees, pays within the limits the user approved, waits on hold, and hands the user a briefed human when one is needed.
 
 - **For agent platforms and developers:** REST + OpenAPI, remote MCP with OAuth, local MCP over stdio. Built to plug into Muse's connector platform and anything else that speaks MCP.
+- **AI-first, with a human fallback:** when the AI gets stuck (a dead end, a loop, an identity check), the call goes to a Voiced operator with full context instead of failing. What the operator does gets learned, so the next call doesn't need them.
 - **The moat:** a shared map of phone trees. Every call teaches Voiced the tree, so the next call to that number (from any user, on any agent) replays the known screens instead of listening to them.
-- **Headline metric:** call completion rate (`GET /v1/stats`, `npm run eval`).
+- **Top-line metric:** share of calls resolved by AI with no human (`GET /v1/stats`, `npm run eval`). Every call ends as `ai`, `human_assisted` or `failed`, with the reason, the step where it broke, and the billable result.
 
-Strategy, market and risks are in [docs/PITCH.md](docs/PITCH.md). The demo video is [demo/voiced-demo.mp4](demo/voiced-demo.mp4).
+Strategy, market and risks are in [docs/PITCH.md](docs/PITCH.md); the human-fallback design is in [docs/DESIGN.md](docs/DESIGN.md). The demo video is [demo/voiced-demo.mp4](demo/voiced-demo.mp4).
 
-> **What's real in this build.** The call engine, map, vault, policy guard, API, MCP and OAuth all run end to end. The four businesses are **simulated phone trees** (fictional companies, 555-01xx numbers, public test cards). The Twilio line for real calls is written and protocol-tested but has **not yet been run against a live Twilio account**. The Claude brain is wired and unit-tested with a stubbed client; run it live with `ANTHROPIC_API_KEY`.
+> **What's real in this build.** The call engine, map, vault, policy guard, operator queue, API, MCP and OAuth all run end to end. The businesses are **simulated phone trees** (fictional companies, 555-01xx numbers, public test cards), and the operator in the demo and evals is a **scripted stand-in**; the operator API is there for real people. The Twilio line for real calls is written and protocol-tested but has **not yet been run against a live Twilio account**. The Claude brain is wired and unit-tested with a stubbed client; run it live with `ANTHROPIC_API_KEY`.
 
 ## Quick start
 
 ```bash
 npm install
-npm test                    # 27 tests: engine, map, vault, guard, server, OAuth + MCP, Twilio protocol
+npm test                    # 38 tests: engine, map, vault, guard, outcomes, operators, dial policy, server, OAuth + MCP, Twilio protocol
 npm run sim bedford         # watch one call in the terminal
 npm run sim all -- --twice  # every tree, twice: the second run replays the map
-npm run eval                # completion rate per tree, cold vs. warm map
+npm run sim hard            # the hard cases: loop → operator, identity check, closures
+npm run eval                # score every tree's outcome (AI / human-assisted / failed) against the expected one
 npm run build:web && npm start   # web app + API + MCP on http://localhost:8787
 ```
 
@@ -98,6 +100,42 @@ flowchart LR
 - **Brains** ([src/brains](src/brains)): the Claude brain makes one Messages API call per decision point, with a cached system prompt, six tools, `claude-opus-5` at low effort, and server-side refusal fallbacks. The rules brain is deterministic and handles menus, keypad entry, speech slots, verification, commit steps, retention offers, hold and humans. It's the fallback when the model fails, and the baseline the model has to beat.
 - **Handoff**: disclose AI, state the purpose, ask to connect, bridge the user in. On Twilio: ring the user, "press 1 to connect", then move the business leg into a conference.
 
+## Outcomes, operators and evals
+
+Every call ends with:
+
+```json
+{ "resolution": "human_assisted",
+  "result": { "kind": "membership_canceled", "confirmation": "CX44190",
+              "evidence": { "t": 229000, "text": "Your cancellation confirmation number is C X 4 4 1 9 0." } },
+  "failure": { "reason": "loop", "step": "Menu: update your payment method · freeze your membership · …",
+               "detail": "The phone tree keeps sending the call back to …" } }
+```
+
+- `resolution`: `ai` (no human), `human_assisted` (an operator acted), or `failed`. Users approving fees or answering identity checks is authorization, not help.
+- `result`: the billable outcome (pricing is per result), with the line on the call that proves it.
+- `failure`: why and where it broke, kept even when an operator rescued the call, so every exception becomes a test case.
+
+**Operator queue** (the stub a human console sits on; operators see redacted context and act with placeholders, never secrets):
+
+```bash
+O='Authorization: Bearer vo_demo_local'                  # VOICED_OPERATOR_KEY
+curl -s localhost:8787/v1/operator/tickets?status=waiting -H "$O"
+curl -s localhost:8787/v1/operator/tickets/<id>/actions -H "$O" -H 'content-type: application/json' \
+  -d '{"type":"say","text":"Cancel my membership.","operator":"sam"}'   # press | say | handoff | return | hangup
+```
+
+By default the server runs a scripted stand-in operator for the simulated trees (`VOICED_OPERATOR=manual` turns it off).
+
+**Eval:** `npm run eval` replays the demo trees and the hard cases, cold and warm, and checks each outcome. Rules brain today: 18/18 match, 72% resolved by AI, 6% with human help, 22% failed (all closures nobody could finish by phone). See [docs/DESIGN.md](docs/DESIGN.md).
+
+## Compliance guardrails
+
+- **Vault:** card, bank, account, PIN and SSN values never reach the model, transcripts, logs, operator tickets or API responses. Recording pauses during vault entry, and CVVs are wiped at hangup.
+- **Disclosure:** the agent says it's an automated assistant calling on the customer's behalf. Operators are disclosed too ("AI with human backup").
+- **Recording consent:** off unless `VOICED_RECORD=1`. When on, every call is treated as all-party consent. The map learns only from automated prompts, never from people.
+- **TCPA line:** real calls go only to allowlisted business lines (`VOICED_ALLOWED_NUMBERS`) or ones attested as business lines (`custom.business_line_attested`), never to the user's own number.
+
 ## Configuration
 
 | Env | Default | |
@@ -108,6 +146,9 @@ flowchart LR
 | `ANTHROPIC_API_KEY` | unset | enables the Claude brain (`VOICED_BRAIN=rules` to force rules) |
 | `VOICED_MODEL` / `VOICED_EFFORT` | `claude-opus-5` / `low` | |
 | `VOICED_DATA` | `.voiced/` | map store and call log |
+| `VOICED_OPERATOR` / `VOICED_OPERATOR_KEY` | scripted / `vo_demo_local` | operator mode and operator API key |
+| `VOICED_ALLOWED_NUMBERS` | unset | comma-separated business lines real calls may dial |
+| `VOICED_RECORD` | unset | `1` records real calls (paused during vault entry) |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_NUMBER`, `VOICED_USER_PHONE` | unset | enables real calls (`custom` tasks on `POST /v1/calls`) |
 
 ### Making real calls (Twilio)
@@ -117,7 +158,7 @@ flowchart LR
 3. Start a call with a custom task. Standard fact keys (`zip`, `account`, `card.number`, `card.exp`, `card.cvv`, `pin`, `member`, …) come with the phrases IVRs use to ask for them, and secret keys go straight to the vault:
    ```json
    { "custom": { "to": "+1…", "business": "…", "kind": "pay_bill", "goal": "Pay the current balance",
-       "user": { "name": "…" }, "max_amount": 200,
+       "user": { "name": "…" }, "max_amount": 200, "business_line_attested": true,
        "facts": { "zip": "…", "account": "…", "card.number": "…", "card.exp": "…", "card.cvv": "…" } } }
    ```
 Status: written against Twilio's documented ConversationRelay protocol (`sendDigits`, `text`, `end` + `handoffData`, `<Connect action>`), with signatures checked against Twilio's published test vector. It has not been run on a live account yet, so expect to tune endpointing (`ENDPOINT_MS`) and `hints` on real IVR audio.

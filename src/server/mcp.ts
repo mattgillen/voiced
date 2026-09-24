@@ -6,12 +6,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CallManager } from './calls.js';
 
-const INSTRUCTIONS = `Voiced is the phone layer for AI agents. It calls businesses for the user and handles the phone tree: IVR menus, account lookups, bill payments, reservations, cancellations, hold queues. When a live human is needed it briefs them and hands the call to the user.
+const INSTRUCTIONS = `Voiced is the phone layer for AI agents. It calls businesses for the user and handles the phone tree: IVR menus, account lookups, bill payments, reservations, cancellations, hold queues. When a live human is needed it briefs them and hands the call to the user. It is AI with human backup: if the AI gets stuck, a Voiced operator steps in, and the call reports resolution "ai", "human_assisted" or "failed". Tell the user honestly which it was.
 
 Typical flow:
 1. list_businesses to find the business_id (this demo build has simulated phone trees only).
 2. start_call with the business_id and any limits the user gave you (max_amount for payments).
-3. get_call with wait_seconds to follow along. If pending_request is set, show the user its title and detail and the approval_url, or ask them directly and relay their answer with respond_to_call. Never approve on the user's behalf.
+3. get_call with wait_seconds to follow along. If pending_request is set, show the user its title and detail and the approval_url, or ask them directly and relay their answer with respond_to_call. Never approve on the user's behalf. For kind "input" (e.g. an identity check), send the user to approval_url so the answer goes straight to the vault instead of through this chat.
 4. When status is "ended", tell the user the summary. Share watch_url if they want to see the live transcript.`;
 
 export function buildMcpServer(calls: CallManager, owner: string): McpServer {

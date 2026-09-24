@@ -249,6 +249,9 @@ button { cursor: pointer; }
 .badge.llm { background: var(--accent-soft); color: var(--accent); }
 .badge.guard { background: var(--red-soft); color: var(--red); }
 .badge.rules { color: var(--faint); border: 1px solid var(--line); }
+.badge.operator { color: var(--ink); border: 1px solid var(--amber); background: var(--amber-soft); }
+.escalation { border: 1px solid var(--amber); background: var(--amber-soft); border-radius: 12px; padding: 10px 12px; }
+.escalation b { display: block; margin-bottom: 2px; }
 .hold-row { display: flex; align-items: center; gap: 10px; border: 1px dashed var(--amber); border-radius: 10px; padding: 8px 10px; color: var(--ink); }
 .hold-row .eq { display: inline-flex; gap: 2px; align-items: end; height: 14px; }
 .hold-row .eq i { width: 3px; background: var(--amber); border-radius: 1px; animation: eq 0.9s ease-in-out infinite; }
@@ -287,6 +290,10 @@ button { cursor: pointer; }
 .result h3 { margin: 0; font: 700 20px/1.2 var(--display); letter-spacing: -0.01em; display: flex; gap: 8px; align-items: center; }
 .result h3 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
 .result.fail h3 .dot { background: var(--red); }
+.result.assisted h3 .dot { background: var(--amber); }
+.billable, .broke { font-size: 14px; }
+.billable .evidence { color: var(--muted); }
+.ask input, .push input { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--surface); }
 .result p { margin: 0; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
 .stat { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 8px 10px; }
