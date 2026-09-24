@@ -10,7 +10,10 @@
     "start": "tsx src/server/index.ts",
     "mcp": "tsx src/mcp/stdio.ts",
     "build:web": "tsx scripts/build-web.ts",
-    "eval": "tsx scripts/eval.ts"
+    "eval": "tsx scripts/eval.ts",
+    "map:export": "tsx scripts/export-map.ts",
+    "check:ui": "tsx scripts/ui-check.ts",
+    "record:demo": "tsx scripts/record-demo.ts"
   },
   "repository": {
     "type": "git",

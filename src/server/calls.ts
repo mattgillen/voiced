@@ -285,7 +285,7 @@ function transcript(events: CallEvent[], n: number) {
   for (const e of events) {
     if (e.type === 'heard' && !(e.speaker === 'hold' && e.text.startsWith('♪'))) lines.push({ t: s(e.t), who: e.speaker, text: e.text });
     else if (e.type === 'action' && e.action.type !== 'wait') lines.push({ t: s(e.t), who: 'voiced', text: e.action.type === 'press' ? `[pressed ${e.display}]` : e.display });
-    else if (e.type === 'bridge') lines.push({ t: s(e.t), who: e.from === 'user' ? 'you' : 'rep', text: e.text });
+    // After handoff the conversation belongs to the user; Voiced doesn't keep it.
     else if (e.type === 'user_response') lines.push({ t: s(e.t), who: 'you', text: e.response.approved ? '[approved]' : '[declined]' });
   }
   return lines.slice(-n);
