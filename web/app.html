@@ -1,0 +1,128 @@
+<title>Voiced</title>
+<meta name="description" content="Voiced navigates phone trees for your AI agent: pays bills, cancels memberships, waits on hold and hands you the human.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<!--STYLES-->
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="12" width="4" height="8" rx="2"/><rect x="10" y="7" width="4" height="18" rx="2"/><rect x="17" y="3" width="4" height="26" rx="2"/><rect x="24" y="10" width="4" height="12" rx="2"/></svg>
+      <span class="word">Voiced</span>
+      <span class="tagline">The phone layer for AI agents</span>
+    </div>
+    <div class="controls">
+      <span class="chip" id="mode-chip">Simulated phone trees</span>
+      <div class="seg" id="brain-seg" role="group" aria-label="Brain" hidden>
+        <button type="button" data-brain="rules" aria-pressed="true">Rules</button>
+        <button type="button" data-brain="claude" aria-pressed="false">Claude</button>
+      </div>
+      <div class="seg" id="speed-seg" role="group" aria-label="Playback speed">
+        <button type="button" data-speed="1" aria-pressed="false">1×</button>
+        <button type="button" data-speed="4" aria-pressed="false">4×</button>
+        <button type="button" data-speed="8" aria-pressed="true">8×</button>
+        <button type="button" data-speed="20" aria-pressed="false">20×</button>
+      </div>
+      <button type="button" class="ghost" id="sound-btn" aria-pressed="false">Sound off</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="pane assistant" aria-label="Your assistant">
+      <div class="pane-head">
+        <h2>Your assistant</h2>
+        <span class="sub">with the Voiced connector</span>
+      </div>
+      <div class="chat" id="chat" aria-live="polite"></div>
+      <div class="suggestions" id="suggestions"></div>
+      <form class="composer" id="composer" autocomplete="off">
+        <label class="sr" for="composer-input">Message your assistant</label>
+        <input id="composer-input" placeholder="Ask your assistant to handle a call…">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+
+    <section class="pane call" aria-label="Live call">
+      <div id="call-idle" class="idle">
+        <p class="eyebrow" id="hero-eyebrow"></p>
+        <h1 id="hero-title">Pay the utility bill. Skip the phone tree.</h1>
+        <p class="lede" id="hero-lede"></p>
+        <div class="versus">
+          <div class="by-hand">
+            <span class="label">By hand</span>
+            <ul id="hero-pain"></ul>
+          </div>
+          <div class="with-voiced">
+            <span class="label">With Voiced</span>
+            <p><strong>1 tap.</strong> You approve the card once. Voiced asks again only if the amount or a fee goes past what you approved.</p>
+          </div>
+        </div>
+        <button type="button" class="primary big" id="hero-cta">Pay my Bedford utilities bill</button>
+        <div class="more">
+          <span class="label">More calls to hand off</span>
+          <div class="task-list" id="task-list"></div>
+        </div>
+      </div>
+
+      <div id="call-live" class="live" hidden>
+        <div class="call-head">
+          <div class="who">
+            <span class="biz" id="call-biz"></span>
+            <span class="num" id="call-num"></span>
+          </div>
+          <span class="pill" id="call-status" data-state="dialing">Dialing</span>
+          <div class="clocks">
+            <span class="clock" id="call-clock">00:00</span>
+            <span class="you" id="call-you">call time · you: 0 taps</span>
+          </div>
+        </div>
+        <div class="push" id="push" hidden></div>
+        <ol class="transcript" id="transcript"></ol>
+        <div class="dock">
+          <div class="keypad" id="keypad" aria-hidden="true"></div>
+          <div class="dock-side">
+            <p class="tones" id="tones">No tones sent yet</p>
+            <form class="talk" id="talk" hidden autocomplete="off">
+              <label class="sr" for="talk-input">Talk to the person on the line</label>
+              <input id="talk-input" placeholder="Talk to the rep…">
+              <button type="submit">Send</button>
+            </form>
+            <div class="replies" id="replies" hidden></div>
+            <button type="button" class="hangup" id="hangup">Hang up</button>
+          </div>
+        </div>
+        <div class="result" id="result" hidden></div>
+      </div>
+    </section>
+
+    <section class="pane map" aria-label="Phone-tree map">
+      <div class="pane-head">
+        <h2>Phone-tree map</h2>
+        <span class="sub" id="map-sub">Screens appear as Voiced hears them</span>
+      </div>
+      <ol class="screens" id="screens"></ol>
+      <div class="network">
+        <h3>Shared map</h3>
+        <p class="note">Every call, from any user, teaches Voiced the tree. The next caller skips the listening.</p>
+        <div class="kpis">
+          <div><span class="kpi" id="kpi-rate">–</span><span class="kpi-label">completion rate</span></div>
+          <div><span class="kpi" id="kpi-calls">0</span><span class="kpi-label">calls</span></div>
+          <div><span class="kpi" id="kpi-hold">0m</span><span class="kpi-label">hold absorbed</span></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Phone tree</th><th scope="col">Screens</th><th scope="col">Calls</th></tr></thead>
+            <tbody id="net-rows"></tbody>
+          </table>
+        </div>
+        <button type="button" class="ghost small" id="reset-map">Reset map</button>
+      </div>
+    </section>
+  </main>
+  <footer class="foot">Demo with simulated phone trees. Businesses, people and numbers are fictional (555-01xx); cards are public test numbers.</footer>
+</div>
+
+<div class="backdrop" id="sheet" hidden>
+  <form class="sheet" id="sheet-form" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></form>
+</div>
+<!--SCRIPT-->

@@ -242,6 +242,13 @@ function titleFor(kind: TurnKind, text: string, options: MenuOption[]): string {
       return 'Verify details';
     case 'goodbye':
       return 'Wrap-up';
+    case 'input': {
+      const wanted = /\b(?:enter|key in)\s+(?:your\s+|the\s+|it\s+)?(?:(?:three or four|\w+)[\s-]digit\s+)?([^,.]+?)(?:,|\.|$|\s+(?:followed|using|starting|found|on your))/i.exec(last) ??
+        /\b(?:enter|key in)\s+(?:your\s+|the\s+)?(?:(?:three or four|\w+)[\s-]digit\s+)?([^,.]+?)(?:,|\.|$|\s+(?:followed|using|starting|found|on your))/i.exec(text);
+      if (wanted && !/^(?:it|on your)/i.test(wanted[1])) return `Enter ${truncate(wanted[1], 40)}`;
+      const noun = /\b((?:mobile|phone|account|card|member|policy|confirmation)\s+(?:number|id))\b/i.exec(text);
+      return noun ? `Enter ${noun[1]}` : 'Keypad entry';
+    }
     default:
       return truncate(last, 64);
   }

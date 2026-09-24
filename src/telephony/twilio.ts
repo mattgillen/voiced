@@ -154,8 +154,11 @@ export class TwilioLine implements Line {
       `<ConversationRelay url="${xml(relay)}" transcriptionProvider="Deepgram" speechModel="nova-3-general" ttsProvider="ElevenLabs" language="en-US" interruptible="none" reportInputDuringAgentSpeech="speech" hints="${xml(hints)}">` +
       `<Parameter name="job" value="${this.job}"/></ConversationRelay></Connect></Response>`;
     const connected = new Promise<void>((resolve, reject) => {
-      this.connected = resolve;
-      setTimeout(() => reject(new Error('Twilio never opened the ConversationRelay socket')), 90_000);
+      const timer = setTimeout(() => reject(new Error('Twilio never opened the ConversationRelay socket')), 90_000);
+      this.connected = () => {
+        clearTimeout(timer);
+        resolve();
+      };
     });
     const call = await this.hub.rest('/Calls.json', {
       To: e164(this.task.phone),
@@ -180,6 +183,7 @@ export class TwilioLine implements Line {
       if (msg.type === 'error') console.warn(`[twilio ${this.job}]`, msg.description);
     });
     ws.on('close', () => {
+      clearTimeout(this.quietTimer);
       if (!this.handedOff) this.remoteHangup();
     });
   }
@@ -223,8 +227,11 @@ export class TwilioLine implements Line {
     if (!userPhone) throw new Error('VOICED_USER_PHONE is not set, so there is no one to hand the call to');
     const base = this.hub.cfg.base();
     const accepted = new Promise<boolean>((resolve) => {
-      this.accepted = resolve;
-      setTimeout(() => resolve(false), 60_000);
+      const timer = setTimeout(() => resolve(false), 60_000);
+      this.accepted = (ok) => {
+        clearTimeout(timer);
+        resolve(ok);
+      };
     });
     await this.hub.rest('/Calls.json', {
       To: e164(userPhone),
