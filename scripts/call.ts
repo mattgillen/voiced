@@ -10,6 +10,9 @@
 //
 // --ask <fact>     typed here with hidden input; goes straight to the vault (not shell history, not any model)
 // --fact k=v       a non-secret fact, e.g. --fact zip=13205
+// --save           remember this call's facts and name for this number (.voiced/facts.json: this machine only,
+//                  gitignored, owner-readable). Later calls to the number use them without asking, the way an
+//                  agent platform passes facts it already has (from your email, say) in start_call.
 // --name "…"       the account holder (asked if missing)
 // --kind           pay_bill (default) | reach_human | cancel | reservation
 // --max-amount N   pre-approve a payment up to $N. Without it nothing can be paid: the guard stops and asks.
@@ -20,7 +23,7 @@
 
 import '../src/env.js';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import type { CallEvent } from '../src/core/types.js';
 import { printEvent } from './transcript.js';
@@ -40,6 +43,8 @@ const local = `http://localhost:${port}`;
 const API_KEY = process.env.VOICED_API_KEY ?? 'vk_demo_local';
 const H = { authorization: `Bearer ${API_KEY}`, 'content-type': 'application/json' };
 const children: ChildProcess[] = [];
+/** Facts remembered per business number with --save. Secrets in it go to the vault like typed ones. */
+const SAVED = '.voiced/facts.json';
 /** The call in progress, so Ctrl+C hangs it up before the server goes away. */
 let liveCall: string | undefined;
 
@@ -122,13 +127,22 @@ if (tunnelUp) {
 let body: Record<string, unknown>;
 if (demo) body = { business_id: demo, max_amount: Number(opt('max-amount') ?? 200), speed: 4 };
 else {
-  const facts: Record<string, string> = {};
+  const saved = loadSaved()[to!] ?? {};
+  const facts: Record<string, string> = { ...saved.facts };
+  if (saved.facts && Object.keys(saved.facts).length) console.log(`  Using saved ${Object.keys(saved.facts).join(', ')} for ${to} (${SAVED})`);
   for (const kv of opts('fact')) {
     const [k, ...v] = kv.split('=');
     facts[k] = v.join('=');
   }
   for (const key of opts('ask')) facts[key] = await askHidden(`${key} (hidden): `);
-  const name = opt('name') ?? (await ask('Account holder name: '));
+  const name = opt('name') ?? saved.name ?? (await ask('Account holder name: '));
+  if (flag('save')) {
+    const all = loadSaved();
+    all[to!] = { name, facts };
+    mkdirSync('.voiced', { recursive: true });
+    writeFileSync(SAVED, JSON.stringify(all, null, 2), { mode: 0o600 });
+    console.log(`  Saved ${['name', ...Object.keys(facts)].join(', ')} for ${to} in ${SAVED} (this machine only)`);
+  }
   const max = opt('max-amount');
   body = {
     custom: {
@@ -184,6 +198,15 @@ async function follow(id: string): Promise<boolean> {
     }
   }
   return false;
+}
+
+/** Facts remembered per business number with --save (see SAVED). */
+function loadSaved(): Record<string, { name?: string; facts?: Record<string, string> }> {
+  try {
+    return JSON.parse(readFileSync(SAVED, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 /** Approvals are answered here; anything secret is entered on the approval page, straight to the vault. */

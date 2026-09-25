@@ -159,7 +159,7 @@ export function openapi(base: string) {
               type: ['object', 'null'],
               description: 'Why and where it broke. Also present when an operator rescued the call.',
               properties: {
-                reason: { type: 'string', enum: ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'hung_up', 'user_declined', 'timeout', 'unresolved'] },
+                reason: { type: 'string', enum: ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'hung_up', 'dial_failed', 'user_declined', 'timeout', 'unresolved'] },
                 detail: { type: 'string' },
                 step: { type: 'string' },
               },

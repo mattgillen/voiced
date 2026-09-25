@@ -197,6 +197,8 @@ export type FailureReason =
   | 'business_unavailable'
   /** The far end hung up unexpectedly. */
   | 'hung_up'
+  /** The call was never placed (the carrier refused it: credentials, number, account). */
+  | 'dial_failed'
   | 'user_declined'
   | 'timeout'
   /** A human operator couldn't fix it either. */

@@ -190,7 +190,7 @@ Run this on your own machine: Twilio has to reach Voiced over a public https URL
      --goal "Hear the current balance and due date, then hang up. Do not make a payment." \
      --ask account --ask zip --record
    ```
-   The script opens a Cloudflare quick tunnel, starts the server behind it, asks for each `--ask` fact with hidden input (it goes straight to the vault, not your shell history or any model), places the call, opens the live transcript in your browser and prints it in the terminal. Approvals are answered in the terminal. Without `--max-amount` nothing can be paid: the guard stops at any payment step. With `--record`, the recording (paused while vault digits are keyed) is saved to `.voiced/recordings/` and opened when the call ends.
+   The script opens a Cloudflare quick tunnel, starts the server behind it, asks for each `--ask` fact with hidden input (it goes straight to the vault, not your shell history or any model), places the call, opens the live transcript in your browser and prints it in the terminal. Approvals are answered in the terminal. Add `--save` once and the facts and name are remembered for that number (`.voiced/facts.json`, this machine only), so later calls don't ask: the local stand-in for an agent passing facts it already has. Without `--max-amount` nothing can be paid: the guard stops at any payment step. With `--record`, the recording (paused while vault digits are keyed) is saved to `.voiced/recordings/` and opened when the call ends.
 
 Under the hood that's `POST /v1/calls` with a custom task. Standard fact keys (`zip`, `account`, `card.number`, `card.exp`, `card.cvv`, `pin`, `member`, …) come with the phrases IVRs use to ask for them, and secret keys go straight to the vault:
 ```json

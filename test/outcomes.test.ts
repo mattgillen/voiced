@@ -109,3 +109,17 @@ test('closures fail honestly with the reason and the step where it broke', async
   const closed = await play('kestrel-closed');
   assert.equal(closed.result.failure?.reason, 'business_unavailable');
 });
+
+test('a call the carrier refuses to place ends as dial_failed, with an ended event (nobody is left waiting)', async () => {
+  const { session, line } = simulate('bedford');
+  line.dial = async () => {
+    throw new Error('Twilio 401: Authentication Error - invalid username');
+  };
+  const events: CallEvent[] = [];
+  session.subscribe((e) => events.push(e));
+  const result = await session.run();
+  assert.equal(result.resolution, 'failed');
+  assert.equal(result.failure?.reason, 'dial_failed');
+  assert.match(result.summary, /Couldn't place the call: Twilio 401/);
+  assert.ok(events.some((e) => e.type === 'ended'));
+});

@@ -180,7 +180,15 @@ export class CallSession {
     const { line, memory, task } = this.opts;
     memory.beginCall(task.phone, task.business);
     this.setStatus('dialing', `${task.business} · ${task.phone}`);
-    await line.dial();
+    try {
+      await line.dial();
+    } catch (err) {
+      // End like any other failed call (an ended event, a reason), so whoever is watching isn't left waiting.
+      const detail = (err as Error).message;
+      this.failure = { reason: 'dial_failed', detail, step: 'Dialing', t: line.now() };
+      this.finish('failure', `Couldn't place the call: ${detail}`);
+      return this.result!;
+    }
     this.setStatus('navigating');
     this.deadline = this.opts.maxCallMs ?? 90 * 60_000;
 
