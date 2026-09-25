@@ -66,7 +66,7 @@ Current result (rules brain): 18/18 calls match their expected outcome. Resolved
 
 ## Voice stack: bought, behind an interface
 
-Telephony, speech-to-text, TTS and the model are commodities. `Line` (`src/core/types.ts`) is the whole telephony contract: `dial`, `next`, `sendDigits`, `say`, `bridge`, `setRecording`, `hangup`. Twilio ConversationRelay implements it today (`src/telephony/twilio.ts`) and the simulator implements it for evals; swapping providers means writing one adapter. The model sits behind `Brain`. The moat is the phone-tree map, the workflow knowledge (task facts, policies, playbooks), and reliability.
+Telephony, speech-to-text, TTS and the model are commodities. `Line` (`src/core/types.ts`) is the whole telephony contract: `dial`, `next`, `sendDigits`, `say`, `bridge`, `setRecording`, `hangup`. Twilio ConversationRelay implements it today (`src/telephony/twilio.ts`) and the simulator implements it for evals; swapping providers means writing one adapter. The model sits behind `Brain`: rules, Gemini (`src/brains/gemini.ts`) and Claude (`src/brains/claude.ts`) share one prompt and one tool list, and rules take any turn a model fails or is rate-limited on. The moat is the phone-tree map, the workflow knowledge (task facts, policies, playbooks), and reliability.
 
 ## Compliance guardrails
 

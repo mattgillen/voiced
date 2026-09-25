@@ -4,15 +4,16 @@
 //   npm start                    # http://localhost:8787
 //   PUBLIC_URL=https://...       # when exposed publicly (connectors need https)
 //   VOICED_API_KEY=vk_...        # developer key (default: vk_demo_local)
-//   ANTHROPIC_API_KEY=...        # use the Claude brain (otherwise rules only)
+//   GEMINI_API_KEY=...           # Gemini brain (free tier works); ANTHROPIC_API_KEY for Claude
+//   Settings can also live in ./.env (copy .env.example).
 
+import '../env.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, normalize as normalizePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ClaudeBrain } from '../brains/claude.js';
-import { RulesBrain } from '../brains/rules.js';
+import { brainKind, describeBrain, makeBrain } from '../brains/select.js';
 import { MapMemory, type IvrMap } from '../core/memory.js';
 import { OperatorQueue, type OperatorCommand } from '../core/operators.js';
 import { attachScriptedOperator } from '../sim/operator.js';
@@ -32,7 +33,8 @@ const OPERATOR_KEY = process.env.VOICED_OPERATOR_KEY ?? 'vo_demo_local';
 // "scripted" (default): a stand-in follows each simulated tree's playbook. "manual": people use the operator API.
 const OPERATOR_MODE = process.env.VOICED_OPERATOR === 'manual' ? 'manual' : 'scripted';
 const DEMO_USER = 'Jordan Lee (demo)';
-const useClaude = process.env.VOICED_BRAIN === 'claude' || (!!process.env.ANTHROPIC_API_KEY && process.env.VOICED_BRAIN !== 'rules');
+const BRAIN = brainKind();
+const brain = makeBrain(BRAIN);
 
 let base = process.env.PUBLIC_URL?.replace(/\/$/, '') ?? `http://localhost:${PORT}`;
 
@@ -47,7 +49,7 @@ const calls = new CallManager({
   operators,
   dialPolicy: { allowed: (process.env.VOICED_ALLOWED_NUMBERS ?? '').split(',').filter(Boolean), userPhone: process.env.VOICED_USER_PHONE },
   memory,
-  brain: () => (useClaude ? new ClaudeBrain() : new RulesBrain()),
+  brain: () => brain,
   baseUrl: base,
   logPath: join(DATA, 'calls.jsonl'),
   realLine: twilio?.line,
@@ -322,7 +324,7 @@ function serveStatic(res: ServerResponse, path: string) {
   }
   let body: string | Buffer = readFileSync(full);
   if (file === 'index.html') {
-    const config = { mode: 'server', apiKey: API_KEY, brain: useClaude ? 'claude' : 'rules', realCalls: !!twilio };
+    const config = { mode: 'server', apiKey: API_KEY, brain: BRAIN, realCalls: !!twilio };
     body = body.toString('utf8').replace('<!--VOICED_CONFIG-->', `<script>window.VOICED_CONFIG=${JSON.stringify(config)}</script>`);
   }
   res.writeHead(200, { 'content-type': TYPES[extname(full)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
@@ -397,7 +399,8 @@ server.listen(PORT, () => {
   console.log(`  web app      ${base}/`);
   console.log(`  REST + spec  ${base}/v1  ·  ${base}/openapi.json`);
   console.log(`  remote MCP   ${base}/mcp  (OAuth or Bearer ${API_KEY})`);
-  console.log(`  brain        ${useClaude ? `Claude (${process.env.VOICED_MODEL ?? 'claude-opus-5'})` : 'rules (set ANTHROPIC_API_KEY for Claude)'}`);
+  console.log(`  brain        ${describeBrain(BRAIN)}`);
+  if (BRAIN === 'gemini' && twilio) console.log('               note: on Gemini\'s free tier Google may use prompts to improve its products; use a paid key for anyone else\'s calls');
   console.log(`  real calls   ${twilio ? 'Twilio' : 'off (simulated phone trees only)'}`);
   console.log(`  operators    ${OPERATOR_MODE === 'scripted' ? 'scripted stand-in (VOICED_OPERATOR=manual for people)' : 'manual'} · ${base}/v1/operator/tickets (Bearer ${OPERATOR_KEY})`);
 });

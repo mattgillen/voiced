@@ -253,7 +253,8 @@ export class TwilioLine implements Line {
     this.send({ type: 'end', handoffData: JSON.stringify({ room: this.room }) });
   }
 
-  /** PCI: pause the recording while card or account digits are keyed (UNVERIFIED on a live account). */
+  /** PCI: pause the recording while card or account digits are keyed. Matches Twilio's spec for
+   *  UpdateCallRecording (Twilio.CURRENT, paused/in-progress, PauseBehavior skip); not yet run on a live call. */
   async setRecording(on: boolean): Promise<void> {
     if (!this.recorded || !this.callSid || this.ended) return;
     await this.hub

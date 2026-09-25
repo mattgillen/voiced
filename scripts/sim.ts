@@ -1,9 +1,11 @@
 // Run a simulated call in the terminal and print the transcript.
 //   npx tsx scripts/sim.ts bedford            # rules brain
+//   npx tsx scripts/sim.ts bedford --gemini   # Gemini brain (needs GEMINI_API_KEY; free tier works)
 //   npx tsx scripts/sim.ts bedford --claude   # Claude brain (needs ANTHROPIC_API_KEY)
 //   npx tsx scripts/sim.ts all --twice        # every scenario, twice, sharing one IVR map
 
-import { ClaudeBrain } from '../src/brains/claude.js';
+import '../src/env.js';
+import { brainKind, makeBrain } from '../src/brains/select.js';
 import { MapMemory } from '../src/core/memory.js';
 import { OperatorQueue } from '../src/core/operators.js';
 import { attachScriptedOperator } from '../src/sim/operator.js';
@@ -16,7 +18,9 @@ const args = process.argv.slice(2);
 const which = args.find((a) => !a.startsWith('--')) ?? 'bedford';
 const twice = args.includes('--twice');
 const quiet = args.includes('--quiet');
-const useClaude = args.includes('--claude');
+const kind = brainKind({}, args);
+// One shared model brain; free-tier rate limits are waited out rather than handed to rules.
+const brain = kind === 'rules' ? undefined : makeBrain(kind, { maxRetryWaitMs: 60_000 });
 const decline = args.includes('--decline');
 const memory = new MapMemory();
 const operators = new OperatorQueue();
@@ -27,7 +31,7 @@ const clock = (t: number) => formatDuration(t).padStart(7);
 
 for (const id of ids) {
   for (let run = 1; run <= (twice ? 2 : 1); run++) {
-    const { session, task } = simulate(id, { memory, operators, brain: useClaude ? new ClaudeBrain() : undefined });
+    const { session, task } = simulate(id, { memory, operators, brain });
     const inputs = getScenario(id)?.userInputs ?? {};
     let replies = 0;
     console.log(`\n━━ ${task.title} · ${task.business} · run ${run} ━━`);

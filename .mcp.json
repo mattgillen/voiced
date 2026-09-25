@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "twilio": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@twilio-alpha/mcp@0.7.0",
+        "${TWILIO_ACCOUNT_SID:-AC_unset}/${TWILIO_API_KEY:-SK_unset}:${TWILIO_API_SECRET:-unset}",
+        "--services",
+        "",
+        "--tags",
+        "Api20100401Call,Api20100401CallRecording,Api20100401CallNotification,Api20100401Recording,Api20100401IncomingPhoneNumber"
+      ]
+    }
+  }
+}

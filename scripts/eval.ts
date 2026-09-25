@@ -5,11 +5,12 @@
 // Top-line metric: share of calls resolved by AI with no human.
 //
 //   npm run eval                 # rules brain
+//   npm run eval -- --gemini     # Gemini brain (needs GEMINI_API_KEY; free tier works, slowly)
 //   npm run eval -- --claude     # Claude brain (needs ANTHROPIC_API_KEY; costs tokens)
 //   npm run eval -- --json       # machine-readable
 
-import type { Brain } from '../src/brains/brain.js';
-import { ClaudeBrain } from '../src/brains/claude.js';
+import '../src/env.js';
+import { brainKind, makeBrain } from '../src/brains/select.js';
 import { MapMemory } from '../src/core/memory.js';
 import { OperatorQueue } from '../src/core/operators.js';
 import { formatDuration } from '../src/core/session.js';
@@ -19,15 +20,20 @@ import { simulate } from '../src/sim/run.js';
 import { allScenarios, getScenario } from '../src/sim/scenarios/index.js';
 
 const args = process.argv.slice(2);
-const brain = (): Brain | undefined => (args.includes('--claude') ? new ClaudeBrain() : undefined);
+const kind = brainKind({}, args);
+// One shared model brain; free-tier rate limits are waited out rather than handed to rules.
+const modelBrain = kind === 'rules' ? undefined : makeBrain(kind, { maxRetryWaitMs: 60_000 });
+/** Model turns that failed and went to rules instead. A model eval with many of these is really a rules eval. */
+let fallbacks = 0;
 
 async function run(id: string, memory: MapMemory): Promise<CallResult> {
   const operators = new OperatorQueue();
   attachScriptedOperator(operators);
-  const { session } = simulate(id, { memory, brain: brain(), operators });
+  const { session } = simulate(id, { memory, brain: modelBrain, operators });
   const inputs = getScenario(id)?.userInputs ?? {};
   let replies = 0;
   session.subscribe((e) => {
+    if (e.type === 'action' && e.reason.includes('rules took over')) fallbacks += 1;
     if (e.type === 'user_request') {
       const r = e.request;
       const text = r.kind === 'input' ? inputs[r.factKey ?? ''] : undefined;
@@ -73,7 +79,8 @@ const summary = {
   ai_resolution_rate: count('ai') / rows.length,
   completion_rate: (count('ai') + count('human_assisted')) / rows.length,
   outcome_matches_expected: rows.filter((r) => r.pass).length,
-  brain: args.includes('--claude') ? 'claude' : 'rules',
+  brain: kind,
+  model_turns_lost_to_rules: fallbacks,
 };
 
 if (args.includes('--json')) {
@@ -100,7 +107,8 @@ if (args.includes('--json')) {
   }
   console.log(
     `\nResolved by AI (no human): ${pct(summary.resolved_by_ai)} · with human help: ${pct(summary.resolved_with_human)} · failed: ${pct(summary.failed)}` +
-      `\nOutcome matched the expected one on ${summary.outcome_matches_expected}/${rows.length} calls (${summary.brain} brain, simulated phone trees; operator is a scripted stand-in).`,
+      `\nOutcome matched the expected one on ${summary.outcome_matches_expected}/${rows.length} calls (${summary.brain} brain, simulated phone trees; operator is a scripted stand-in).` +
+      (fallbacks ? `\n${fallbacks} model turns failed and were decided by rules instead.` : ''),
   );
 }
 if (rows.some((r) => !r.pass)) process.exitCode = 1;

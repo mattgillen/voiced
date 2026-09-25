@@ -9,19 +9,32 @@
 
 Strategy, market and risks are in [docs/PITCH.md](docs/PITCH.md); the human-fallback design is in [docs/DESIGN.md](docs/DESIGN.md). The demo video is [demo/voiced-demo.mp4](demo/voiced-demo.mp4).
 
-> **What's real in this build.** The call engine, map, vault, policy guard, operator queue, API, MCP and OAuth all run end to end. The businesses are **simulated phone trees** (fictional companies, 555-01xx numbers, public test cards), and the operator in the demo and evals is a **scripted stand-in**; the operator API is there for real people. The Twilio line for real calls is written and protocol-tested but has **not yet been run against a live Twilio account**. The Claude brain is wired and unit-tested with a stubbed client; run it live with `ANTHROPIC_API_KEY`.
+> **What's real in this build.** The call engine, map, vault, policy guard, operator queue, API, MCP and OAuth all run end to end. The businesses are **simulated phone trees** (fictional companies, 555-01xx numbers, public test cards), and the operator in the demo and evals is a **scripted stand-in**; the operator API is there for real people. The Twilio line for real calls is written and protocol-tested but has **not yet been run against a live Twilio account**. The model brains (Gemini and Claude) are wired and unit-tested with stubbed clients; run them live with `GEMINI_API_KEY` (free tier works) or `ANTHROPIC_API_KEY`.
 
 ## Quick start
 
 ```bash
 npm install
-npm test                    # 38 tests: engine, map, vault, guard, outcomes, operators, dial policy, server, OAuth + MCP, Twilio protocol
+npm test                    # 43 tests: engine, map, vault, guard, outcomes, operators, dial policy, server, OAuth + MCP, Twilio protocol, brains
 npm run sim bedford         # watch one call in the terminal
 npm run sim all -- --twice  # every tree, twice: the second run replays the map
 npm run sim hard            # the hard cases: loop → operator, identity check, closures
 npm run eval                # score every tree's outcome (AI / human-assisted / failed) against the expected one
 npm run build:web && npm start   # web app + API + MCP on http://localhost:8787
 ```
+
+Everything above runs on the rules brain with no keys. To put a model in the loop:
+
+```bash
+cp .env.example .env        # then fill in GEMINI_API_KEY (free: https://aistudio.google.com/apikey)
+npm run sim bedford -- --gemini
+npm run eval -- --gemini    # also prints how many model turns failed and fell back to rules
+npm start                   # the server picks Gemini up from .env
+```
+
+In a Claude Code cloud session there's no `.env`: add the variables in the environment's settings and start a new session. Keys never go in chat, commits or the web app.
+
+Gemini's free tier is fine for the simulator and your own calls. Google may use free-tier prompts to improve its products, and while secrets never reach the model, names, ZIPs and transcripts do, so use a paid key for anyone else's calls.
 
 Open `demo/voiced.html` directly in a browser for the standalone demo, which runs the whole engine in the page.
 
@@ -143,13 +156,23 @@ By default the server runs a scripted stand-in operator for the simulated trees 
 | `PORT` | `8787` | |
 | `PUBLIC_URL` | `http://localhost:PORT` | public https base; required for connectors and Twilio |
 | `VOICED_API_KEY` | `vk_demo_local` | developer key; change it anywhere public |
-| `ANTHROPIC_API_KEY` | unset | enables the Claude brain (`VOICED_BRAIN=rules` to force rules) |
+| `GEMINI_API_KEY` | unset | enables the Gemini brain (`GOOGLE_API_KEY` also works) |
+| `VOICED_GEMINI_MODEL` / `VOICED_GEMINI_THINKING` | `gemini-flash-latest` / model default | thinking: `low`/`high`, or a token budget |
+| `ANTHROPIC_API_KEY` | unset | enables the Claude brain; wins over Gemini when both are set |
 | `VOICED_MODEL` / `VOICED_EFFORT` | `claude-opus-5` / `low` | |
+| `VOICED_BRAIN` | first key present, else `rules` | force `rules`, `gemini` or `claude` |
 | `VOICED_DATA` | `.voiced/` | map store and call log |
 | `VOICED_OPERATOR` / `VOICED_OPERATOR_KEY` | scripted / `vo_demo_local` | operator mode and operator API key |
 | `VOICED_ALLOWED_NUMBERS` | unset | comma-separated business lines real calls may dial |
 | `VOICED_RECORD` | unset | `1` records real calls (paused during vault entry) |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_NUMBER`, `VOICED_USER_PHONE` | unset | enables real calls (`custom` tasks on `POST /v1/calls`) |
+| `TWILIO_API_KEY`, `TWILIO_API_SECRET` | unset | for Twilio's own MCP server (below), not for calls |
+
+All of these can go in `.env` (see `.env.example`).
+
+### Twilio's MCP server (for setup, not for calls)
+
+`.mcp.json` registers Twilio's official MCP server ([`@twilio-alpha/mcp`](https://www.npmjs.com/package/@twilio-alpha/mcp), pinned) so Claude Code can buy and configure numbers, and read call logs, notifications and recordings while debugging real calls. It's filtered to 20 tools (calls, recordings, notifications, phone numbers) because the full API is 197 tools and about 300 KB of schemas. It needs `TWILIO_ACCOUNT_SID`, `TWILIO_API_KEY` and `TWILIO_API_SECRET`, plus network access to `api.twilio.com`. It doesn't navigate phone trees: it can start a call, but nothing in it listens, decides or keys digits. That's Voiced.
 
 ### Making real calls (Twilio)
 

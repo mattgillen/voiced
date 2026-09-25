@@ -8,13 +8,13 @@ import { SampleBrain, type SampleFn } from './sample-brain.js';
 interface Config {
   mode: 'local' | 'server';
   apiKey?: string;
-  brain?: 'claude' | 'rules';
+  brain?: 'claude' | 'gemini' | 'rules';
 }
 
 const config: Config = (window as unknown as { VOICED_CONFIG?: Config }).VOICED_CONFIG ?? { mode: 'local' };
 const engine: Engine =
   config.mode === 'server'
-    ? new RemoteEngine(config.apiKey ?? '', config.brain === 'claude' ? 'Claude brain' : 'Rules brain')
+    ? new RemoteEngine(config.apiKey ?? '', config.brain === 'claude' ? 'Claude brain' : config.brain === 'gemini' ? 'Gemini brain' : 'Rules brain')
     : new LocalEngine();
 
 // --- DOM helpers ------------------------------------------------------------------
