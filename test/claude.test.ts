@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { BrainState } from '../src/brains/brain.js';
 import { ClaudeBrain } from '../src/brains/claude.js';
-import { renderContext } from '../src/brains/prompt.js';
+import { renderContext, toDecision } from '../src/brains/prompt.js';
 import { analyzeTurn } from '../src/core/parse.js';
 import { bedford } from '../src/sim/scenarios/bedford.js';
 
@@ -85,4 +85,21 @@ test('payment approvals carry amount and fee', async () => {
     assert.equal(d.action.request.fee, 2.95);
     assert.equal(d.action.request.cardLabel, 'Visa •• 4242');
   } else assert.fail('expected approve_payment');
+});
+
+test('input requests for a standard fact use its key, so the answer lands where the vault and the map expect it', () => {
+  const ask = (fact_label: string, turn: string) =>
+    toDecision('ask_user', { kind: 'input', title: 'Identity check', detail: 'They want it', fact_label, reason: 'Not on file' }, state([turn])).action;
+  const ssn = ask('last 4 of SSN', 'Please enter the last four digits of the Social Security number on the account.');
+  assert.ok(ssn.type === 'ask_user' && ssn.request.kind === 'input');
+  if (ssn.type === 'ask_user' && ssn.request.kind === 'input') {
+    assert.equal(ssn.request.factKey, 'ssn4');
+    assert.equal(ssn.request.factLabel, 'Last 4 of SSN');
+  }
+  // The IVR's wording decides when the label is the model's own phrasing.
+  const dob = ask('verification', 'Please say or enter your date of birth.');
+  assert.ok(dob.type === 'ask_user' && dob.request.kind === 'input' && dob.request.factKey === 'dob');
+  // Whole words only ("shipping" is not "pin"), and unknown asks keep a private key.
+  const other = ask('shipping reference', 'Enter the shipping reference from your receipt.');
+  assert.ok(other.type === 'ask_user' && other.request.kind === 'input' && other.request.factKey === 'asked.shipping_reference');
 });

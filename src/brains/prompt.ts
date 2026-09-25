@@ -1,7 +1,8 @@
 // Prompt and output handling shared by every model-backed brain (the Claude API
 // on the server, the artifact's in-page Claude sampling in the browser).
 
-import { formatTime, money } from '../core/parse.js';
+import { formatTime, money, normalize } from '../core/parse.js';
+import { STANDARD_FACTS } from '../core/tasks.js';
 import type { Action, Decision, TurnKind, UserRequest } from '../core/types.js';
 import type { BrainState } from './brain.js';
 
@@ -11,6 +12,8 @@ How the call works:
 - You hear the far end as transcribed text. Recorded menus sound like "For billing, press 2" or "You can say 'reservations'".
 - Act with exactly one tool call: press_keys (DTMF tones), say (speech), wait, ask_user, handoff_to_user, or end_call.
 - Prefer the keypad when a prompt accepts it. Press only what the prompt asks for. Add "#" only when it says "followed by the pound key".
+- Wait when nothing on offer is for you yet: a greeting, an option for another language ("para español, oprima nueve"), "please listen carefully". Phone trees play the next menu after a pause. Don't speak at a keypad menu unless it invites speech.
+- If the IVR rejects what you did ("not a valid entry", "I didn't understand"), don't repeat it: wait, pick another option, or switch between keypad and speech.
 - Speak like a caller talking to a speech system: short and literal ("Pay my bill", "Four people", "7 PM, please").
 
 Secrets:
@@ -23,7 +26,8 @@ Policy (also enforced in code, so don't try to work around it):
 - On hold: wait. Never hang up on a hold queue.
 - Live humans: when a person answers (introduces themselves by name, asks who they're speaking with), say you're an AI assistant calling for the user and state the purpose in one or two sentences. If the task says to hand off, ask whether you can connect the user, then call handoff_to_user once they agree. Don't share secrets or make commitments with people.
 - When you hear the confirmation or reference number that completes the goal, call end_call with outcome "success" and a one-line summary that includes it.
-- If the IVR asks for something that isn't in FACTS (an identity check, a number you don't have), call ask_user with kind "input" and a short fact_label. The user's answer goes to the vault and shows up in FACTS as a placeholder.
+- If the IVR asks for something that isn't in FACTS (an identity check, a number you don't have), call ask_user with kind "input" and a short fact_label. The user's answer goes to the vault and shows up in FACTS as a placeholder: press that placeholder next.
+- USER DECISIONS lists what the user already answered on this call, and each answer is final. APPROVED means go ahead now (for a payment, press the confirm key). Never ask the same thing twice. DECLINED means don't do it: cancel at the prompt or end the call.
 - If you're stuck (no option leads to the goal, the tree loops, a check you can't pass, the same prompt keeps rejecting you), call escalate_to_operator. A human operator takes over with the full context. Don't guess and don't give up: escalating is the right move, and it is how the system learns.
 
 Write "reason" as one short sentence the user reads in a live transcript. This is latency-sensitive: decide quickly.`;
@@ -92,7 +96,8 @@ const reason = { type: 'string', description: 'One short sentence for the live t
 export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'press_keys',
-    description: 'Send DTMF keypad tones: menu choices and keypad entry. May contain {{key}} placeholders for facts.',
+    description:
+      'Send DTMF keypad tones: menu choices and keypad entry. May contain {{key}} placeholders for facts. End with "#" only when the prompt says "followed by the pound key".',
     input_schema: { type: 'object', properties: { digits: { type: 'string' }, reason }, required: ['digits', 'reason'] },
   },
   {
@@ -130,7 +135,12 @@ export const TOOL_SPECS: ToolSpec[] = [
     input_schema: {
       type: 'object',
       properties: {
-        reason: { type: 'string', enum: ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'timeout'] },
+        reason: {
+          type: 'string',
+          enum: ['dead_end', 'loop', 'identity_check', 'business_unavailable', 'timeout'],
+          description:
+            'loop: the tree keeps sending you back to a screen you already heard (an option is "unavailable" and returns to the menu). dead_end: no option leads to the goal. identity_check: a verification you cannot pass. business_unavailable: closed, offline or not taking calls. timeout: far too long with no progress.',
+        },
         detail: { type: 'string', description: 'What is blocking, in one sentence. Shown to the operator and the user.' },
       },
       required: ['reason', 'detail'],
@@ -198,8 +208,13 @@ export function toDecision(name: string, input: Record<string, unknown>, s: Brai
         action = { type: 'ask_user', request: { kind: 'choose', title, detail, options: input.options.map(String) } };
       } else if (kind === 'input') {
         const label = typeof input.fact_label === 'string' && input.fact_label.trim() ? input.fact_label.trim() : title;
-        const key = `asked.${label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32)}`;
-        action = { type: 'ask_user', request: { kind: 'input', title, detail, secret: true, factKey: key, factLabel: label, aliases: [label.toLowerCase()] } };
+        // A standard fact (ssn4, dob, pin…) keeps its standard key, so the answer lands where the vault,
+        // the rules brain and the IVR map expect it, and a replayed screen works on the next call.
+        const std = standardFact(label, s.turn.join(' '));
+        const key = std?.[0] ?? `asked.${label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32)}`;
+        const factLabel = std?.[1].label ?? label;
+        const aliases = std?.[1].aliases ?? [label.toLowerCase()];
+        action = { type: 'ask_user', request: { kind: 'input', title, detail, secret: true, factKey: key, factLabel, aliases } };
       } else action = { type: 'ask_user', request: { kind: 'approve', title, detail } };
       break;
     }
@@ -222,6 +237,18 @@ export function toDecision(name: string, input: Record<string, unknown>, s: Brai
   const cacheable =
     (action.type === 'press' || action.type === 'say') && s.speaker === 'ivr' && CACHEABLE_KINDS.includes(s.analysis.kind);
   return { action, reason: why, source: 'llm', cacheable };
+}
+
+/** The standard fact an input request is about: by the model's label first, else by what the IVR just asked. */
+function standardFact(label: string, prompt: string) {
+  const says = (text: string, phrase: string) => new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text);
+  const l = normalize(label);
+  const p = normalize(prompt);
+  const facts = Object.entries(STANDARD_FACTS);
+  return (
+    facts.find(([, f]) => normalize(f.label) === l || f.aliases.some((a) => says(l, a))) ??
+    facts.find(([, f]) => f.aliases.some((a) => says(p, a)))
+  );
 }
 
 /** JSON-output variant of the tool list, for runtimes without tool use. */
