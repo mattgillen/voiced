@@ -8,13 +8,15 @@
 //   npm run eval -- --gemini     # Gemini brain (needs GEMINI_API_KEY; free tier works, slowly)
 //   npm run eval -- --claude     # Claude brain (needs ANTHROPIC_API_KEY; costs tokens)
 //   npm run eval -- --json       # machine-readable
+//   npm run eval -- --gemini --transcripts=out.json   # also save every call's events, to see where a model went wrong
 
 import '../src/env.js';
+import { writeFileSync } from 'node:fs';
 import { brainKind, makeBrain } from '../src/brains/select.js';
 import { MapMemory } from '../src/core/memory.js';
 import { OperatorQueue } from '../src/core/operators.js';
 import { formatDuration } from '../src/core/session.js';
-import type { CallResult, Resolution } from '../src/core/types.js';
+import type { CallEvent, CallResult, Resolution } from '../src/core/types.js';
 import { attachScriptedOperator } from '../src/sim/operator.js';
 import { simulate } from '../src/sim/run.js';
 import { allScenarios, getScenario } from '../src/sim/scenarios/index.js';
@@ -27,14 +29,18 @@ const modelBrain = kind === 'rules' ? undefined : makeBrain(kind, { maxRetryWait
 let fallbacks = 0;
 /** Wall-clock time of each model-decided turn (includes any rate-limit waits it sat out). */
 const latencies: number[] = [];
+const transcriptsPath = args.find((a) => a.startsWith('--transcripts='))?.slice('--transcripts='.length);
+const transcripts: Record<string, CallEvent[]> = {};
 
-async function run(id: string, memory: MapMemory): Promise<CallResult> {
+async function run(id: string, memory: MapMemory, label: string): Promise<CallResult> {
   const operators = new OperatorQueue();
   attachScriptedOperator(operators);
   const { session } = simulate(id, { memory, brain: modelBrain, operators });
   const inputs = getScenario(id)?.userInputs ?? {};
   let replies = 0;
+  const events: CallEvent[] = (transcripts[label] = []);
   session.subscribe((e) => {
+    events.push(e);
     if (e.type === 'action' && e.reason.includes('rules took over')) fallbacks += 1;
     if (e.type === 'action' && e.source === 'llm') latencies.push(e.latencyMs);
     if (e.type === 'user_request') {
@@ -47,7 +53,11 @@ async function run(id: string, memory: MapMemory): Promise<CallResult> {
       if (next) setTimeout(() => void session.userSays(next), 0);
     }
   });
-  return session.run();
+  const result = await session.run();
+  if (transcriptsPath) writeFileSync(transcriptsPath, JSON.stringify(transcripts));
+  // Model evals take minutes: show progress.
+  if (modelBrain) console.error(`${label}: ${result.resolution}${result.failure ? ` (${result.failure.reason})` : ''} · model calls ${result.llmCalls}`);
+  return result;
 }
 
 interface Row {
@@ -62,12 +72,12 @@ interface Row {
 const rows: Row[] = [];
 for (const s of allScenarios) {
   const memory = new MapMemory();
-  if (s.warmWith) await run(s.warmWith, memory);
-  const cold = await run(s.id, memory);
+  if (s.warmWith) await run(s.warmWith, memory, `${s.id}:prewarm`);
+  const cold = await run(s.id, memory, `${s.id}:${s.warmWith ? 'warm' : 'cold'}`);
   const reasonOk = !s.expect.reason || cold.failure?.reason === s.expect.reason;
   rows.push({ scenario: s.id, mode: s.warmWith ? 'warm' : 'cold', expected: s.expect.resolution, expectedReason: s.expect.reason, got: cold, pass: cold.resolution === s.expect.resolution && reasonOk });
   // Every tree gets a second call on the same map: exceptions a person fixed should now be handled by the AI.
-  const warm = await run(s.id, memory);
+  const warm = await run(s.id, memory, `${s.id}:warm${s.warmWith ? '2' : ''}`);
   const expectedWarm = s.expect.warm ?? s.expect.resolution;
   rows.push({ scenario: s.id, mode: 'warm', expected: expectedWarm, expectedReason: expectedWarm === 'failed' ? s.expect.reason : undefined, got: warm, pass: warm.resolution === expectedWarm && (expectedWarm !== 'failed' || !s.expect.reason || warm.failure?.reason === s.expect.reason) });
 }
