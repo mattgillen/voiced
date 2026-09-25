@@ -31,7 +31,8 @@ interface TwilioConfig {
 export function twilioFromEnv(base: () => string) {
   const { TWILIO_ACCOUNT_SID: sid, TWILIO_AUTH_TOKEN: token, TWILIO_NUMBER: from, VOICED_USER_PHONE: userPhone } = process.env;
   if (!sid || !token || !from) return undefined;
-  const hub = new RelayHub({ sid, token, from, userPhone, base });
+  // Caller ID in E.164 whatever format the env uses ("(315) 555-0100" works too).
+  const hub = new RelayHub({ sid, token, from: e164(from), userPhone, base });
   return {
     line: (task: Task): Line => new TwilioLine(hub, task),
     attach: (server: Server) => hub.attach(server),

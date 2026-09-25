@@ -91,6 +91,49 @@ test('rate limits: waits out a short retryDelay when allowed, otherwise throws s
     console.warn = warn;
   }
   assert.equal(live.calls.length, 1);
+
+  // A spent daily quota also carries a retryDelay, but waiting it out is pointless: throw at once.
+  const daily = fakeFetch([
+    {
+      status: 429,
+      body: {
+        error: {
+          code: 429,
+          message: 'Quota exceeded',
+          status: 'RESOURCE_EXHAUSTED',
+          details: [
+            { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] },
+            { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '2s' },
+          ],
+        },
+      },
+    },
+  ]);
+  slept.length = 0;
+  console.warn = () => {};
+  try {
+    await assert.rejects(
+      new GeminiBrain({ apiKey: 'k', fetch: daily.fetch, sleep, maxRetryWaitMs: 60_000 }).decide(state(['Please hold.'])),
+      /daily quota spent .*20 requests\/day/,
+    );
+  } finally {
+    console.warn = warn;
+  }
+  assert.deepEqual(slept, []);
+  assert.equal(daily.calls.length, 1);
+
+  // 503 "high demand" is transient: back off within the budget, and live calls (no budget) fall back at once.
+  const busy = { status: 503, body: { error: { code: 503, message: 'This model is currently experiencing high demand.', status: 'UNAVAILABLE' } } };
+  slept.length = 0;
+  const retried = fakeFetch([busy, busy, toolReply('wait', { reason: 'hold music' })]);
+  assert.equal((await new GeminiBrain({ apiKey: 'k', fetch: retried.fetch, sleep, maxRetryWaitMs: 60_000 }).decide(state(['Please hold.']))).action.type, 'wait');
+  assert.deepEqual(slept, [2000, 4000]);
+  console.warn = () => {};
+  try {
+    await assert.rejects(new GeminiBrain({ apiKey: 'k', fetch: fakeFetch([busy]).fetch, sleep }).decide(state(['Please hold.'])), /503.*high demand/);
+  } finally {
+    console.warn = warn;
+  }
 });
 
 test('errors, blocks and non-tool answers throw (the session falls back to rules)', async () => {

@@ -2,8 +2,9 @@
 // Claude brain, over the Gemini API's REST endpoint (no SDK). Function calling is
 // forced (mode ANY), so every turn comes back as exactly one tool call.
 //
-// Free-tier keys work, with two caveats: rate limits (a 429 falls back to rules
-// unless maxRetryWaitMs allows waiting it out), and Google's terms for unpaid
+// Free-tier keys work, with two caveats: rate limits (a 429 or a 503 "high
+// demand" falls back to rules unless maxRetryWaitMs allows waiting it out; a
+// spent daily quota always falls back at once), and Google's terms for unpaid
 // use, which let Google use prompts and responses to improve its products.
 // Secrets never reach any brain, but names, ZIPs and transcripts do.
 
@@ -33,7 +34,12 @@ interface GeminiPart {
 interface GeminiResponse {
   candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
   promptFeedback?: { blockReason?: string };
-  error?: { code: number; message: string; status: string; details?: { '@type'?: string; retryDelay?: string }[] };
+  error?: {
+    code: number;
+    message: string;
+    status: string;
+    details?: { '@type'?: string; retryDelay?: string; violations?: { quotaId?: string; quotaValue?: string }[] }[];
+  };
 }
 
 const DECLARATIONS = TOOL_SPECS.map((t) => ({ name: t.name, description: t.description, parameters: t.input_schema }));
@@ -83,6 +89,7 @@ export class GeminiBrain implements Brain {
     };
     const url = `${ENDPOINT}/models/${encodeURIComponent(this.model)}:generateContent`;
     let waited = 0;
+    let retries = 0;
     for (;;) {
       const res = await this.fetch(url, {
         method: 'POST',
@@ -91,6 +98,9 @@ export class GeminiBrain implements Brain {
       });
       const json = (await res.json().catch(() => ({}))) as GeminiResponse;
       if (res.status === 429) {
+        // A spent daily quota comes back with a short retryDelay too, but waiting can't help until tomorrow.
+        const daily = dailyQuota(json);
+        if (daily) throw new Error(`Gemini daily quota spent (${this.model}: ${daily} requests/day on this key); try another VOICED_GEMINI_MODEL`);
         const delay = retryDelayMs(json) ?? 10_000;
         if (waited + delay <= this.maxRetryWaitMs) {
           waited += delay;
@@ -98,6 +108,16 @@ export class GeminiBrain implements Brain {
           continue;
         }
         throw new Error(`rate limited by Gemini (${this.model}): ${json.error?.message ?? 'quota exceeded'}`);
+      }
+      if (res.status === 503 || res.status === 500) {
+        // "High demand" spikes: back off 2s, 4s, 8s… within the same budget as rate limits.
+        const delay = 2000 * 2 ** retries;
+        if (waited + delay <= this.maxRetryWaitMs) {
+          waited += delay;
+          retries += 1;
+          await this.sleep(delay);
+          continue;
+        }
       }
       if (!res.ok) throw new Error(`Gemini ${res.status} (${this.model}): ${json.error?.message ?? res.statusText}`);
       if (json.promptFeedback?.blockReason) throw new Error(`Gemini blocked the prompt: ${json.promptFeedback.blockReason}`);
@@ -113,6 +133,13 @@ export class GeminiBrain implements Brain {
     if (!t) return {};
     return /^-?\d+$/.test(t) ? { thinkingConfig: { thinkingBudget: Number(t) } } : { thinkingConfig: { thinkingLevel: t } };
   }
+}
+
+/** The per-day limit a 429 hit, from its google.rpc.QuotaFailure (quotaId like "GenerateRequestsPerDayPerProjectPerModel-FreeTier"). */
+function dailyQuota(json: GeminiResponse): string | undefined {
+  const failure = json.error?.details?.find((d) => d['@type']?.endsWith('QuotaFailure'));
+  const v = failure?.violations?.find((x) => /PerDay/i.test(x.quotaId ?? ''));
+  return v ? (v.quotaValue ?? '?') : undefined;
 }
 
 /** Gemini's 429s carry a google.rpc.RetryInfo with retryDelay like "13s" or "0.5s". */

@@ -25,6 +25,8 @@ const kind = brainKind({}, args);
 const modelBrain = kind === 'rules' ? undefined : makeBrain(kind, { maxRetryWaitMs: 60_000 });
 /** Model turns that failed and went to rules instead. A model eval with many of these is really a rules eval. */
 let fallbacks = 0;
+/** Wall-clock time of each model-decided turn (includes any rate-limit waits it sat out). */
+const latencies: number[] = [];
 
 async function run(id: string, memory: MapMemory): Promise<CallResult> {
   const operators = new OperatorQueue();
@@ -34,6 +36,7 @@ async function run(id: string, memory: MapMemory): Promise<CallResult> {
   let replies = 0;
   session.subscribe((e) => {
     if (e.type === 'action' && e.reason.includes('rules took over')) fallbacks += 1;
+    if (e.type === 'action' && e.source === 'llm') latencies.push(e.latencyMs);
     if (e.type === 'user_request') {
       const r = e.request;
       const text = r.kind === 'input' ? inputs[r.factKey ?? ''] : undefined;
@@ -81,7 +84,14 @@ const summary = {
   outcome_matches_expected: rows.filter((r) => r.pass).length,
   brain: kind,
   model_turns_lost_to_rules: fallbacks,
+  model_turns: latencies.length,
+  model_latency_ms: latencies.length ? { median: percentile(latencies, 0.5), p90: percentile(latencies, 0.9), max: Math.max(...latencies) } : undefined,
 };
+
+function percentile(xs: number[], p: number): number {
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+}
 
 if (args.includes('--json')) {
   console.log(JSON.stringify({ summary, rows: rows.map((r) => ({ ...r, got: { resolution: r.got.resolution, failure: r.got.failure, result: r.got.result, callMs: r.got.callMs, mapHits: r.got.mapHits, operatorTouches: r.got.operatorTouches, userTouches: r.got.userTouches } })) }, null, 2));
@@ -108,6 +118,9 @@ if (args.includes('--json')) {
   console.log(
     `\nResolved by AI (no human): ${pct(summary.resolved_by_ai)} · with human help: ${pct(summary.resolved_with_human)} · failed: ${pct(summary.failed)}` +
       `\nOutcome matched the expected one on ${summary.outcome_matches_expected}/${rows.length} calls (${summary.brain} brain, simulated phone trees; operator is a scripted stand-in).` +
+      (summary.model_latency_ms
+        ? `\n${summary.model_turns} model turns, latency median ${(summary.model_latency_ms.median / 1000).toFixed(1)}s · p90 ${(summary.model_latency_ms.p90 / 1000).toFixed(1)}s · max ${(summary.model_latency_ms.max / 1000).toFixed(1)}s.`
+        : '') +
       (fallbacks ? `\n${fallbacks} model turns failed and were decided by rules instead.` : ''),
   );
 }

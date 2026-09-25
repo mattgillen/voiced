@@ -17,7 +17,7 @@ test('X-Twilio-Signature matches the documented test vector', () => {
 
 test('TwilioLine: dials with ConversationRelay TwiML, turns prompts into speech, sends DTMF', async () => {
   const env = { ...process.env };
-  Object.assign(process.env, { TWILIO_ACCOUNT_SID: 'AC123', TWILIO_AUTH_TOKEN: 'secret', TWILIO_NUMBER: '+15550100000', VOICED_USER_PHONE: '+14155550142' });
+  Object.assign(process.env, { TWILIO_ACCOUNT_SID: 'AC123', TWILIO_AUTH_TOKEN: 'secret', TWILIO_NUMBER: '(555) 010-0000', VOICED_USER_PHONE: '+14155550142' });
   const requests: { url: string; body: URLSearchParams }[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string, init: RequestInit) => {
@@ -36,6 +36,7 @@ test('TwilioLine: dials with ConversationRelay TwiML, turns prompts into speech,
     const create = requests[0];
     assert.match(create.url, /\/Accounts\/AC123\/Calls\.json$/);
     assert.equal(create.body.get('To'), '+13155550110');
+    assert.equal(create.body.get('From'), '+15550100000', 'caller ID goes out in E.164 whatever the env format');
     const twiml = create.body.get('Twiml')!;
     assert.match(twiml, /<ConversationRelay url="wss:\/\/voiced\.example\.com\/twilio\/relay\?job=/);
     assert.doesNotMatch(twiml, /welcomeGreeting/, 'the agent must not talk first on an IVR call');
