@@ -35,7 +35,7 @@ npm start                   # the server picks Gemini up from .env
 
 In a Claude Code cloud session there's no `.env`: add the variables in the environment's settings and start a new session. Keys never go in chat, commits or the web app.
 
-Gemini's free tier is fine for the simulator and your own calls. Google may use free-tier prompts to improve its products, and while secrets never reach the model, names, ZIPs and transcripts do, so use a paid key for anyone else's calls.
+On the free tier, the full Flash models allow about 20 requests a day per model, and an eval needs about 110, so set `VOICED_GEMINI_MODEL=gemini-flash-lite-latest` (18/18 on the eval, 0.6 s per turn). Gemini's free tier is fine for the simulator and your own calls. Google may use free-tier prompts to improve its products, and while secrets never reach the model, names, ZIPs and transcripts do, so use a paid key for anyone else's calls.
 
 Open `demo/voiced.html` directly in a browser for the standalone demo, which runs the whole engine in the page.
 

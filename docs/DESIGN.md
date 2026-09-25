@@ -62,7 +62,7 @@ The simulator doubles as the eval. `npm run eval` replays every tree twice (cold
 | `bedford-moved` | Menu reshuffled since the map was learned | AI (replay fails once, map heals) |
 | `kestrel-closed` | Queue refuses callers after the menus | Failed, `business_unavailable` |
 
-Current result (rules brain): 18/18 calls match their expected outcome. Resolved by AI 72%, with human help 6%, failed 22% (every failure is a closure no one could finish by phone). Recorded real calls become new cases by adding a scenario with its `expect` block.
+Current result (rules brain): 18/18 calls match their expected outcome. Resolved by AI 72%, with human help 6%, failed 22% (every failure is a closure no one could finish by phone). Gemini 3.5 Flash-Lite and 3.1 Flash-Lite (free tier, `npm run eval -- --gemini`) match the same 18/18 with no turns lost to rules, up from 13/18 and 11/18 before the prompt fixes from their transcripts; 3.5 Flash-Lite answers in 0.6 s per turn (median). Recorded real calls become new cases by adding a scenario with its `expect` block.
 
 ## Voice stack: bought, behind an interface
 
