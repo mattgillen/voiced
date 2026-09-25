@@ -29,6 +29,7 @@ Everything above runs on the rules brain with no keys. To put a model in the loo
 ```bash
 cp .env.example .env        # then fill in GEMINI_API_KEY (free: https://aistudio.google.com/apikey)
 npm run sim bedford -- --gemini
+npm run sim bedford -- --claude-code   # Claude through Claude Code on your Claude login: no API key (about 3 s a turn)
 npm run eval -- --gemini    # also prints how many model turns failed and fell back to rules
 npm start                   # the server picks Gemini up from .env
 ```
@@ -161,7 +162,8 @@ By default the server runs a scripted stand-in operator for the simulated trees 
 | `VOICED_GEMINI_MODEL` / `VOICED_GEMINI_THINKING` | `gemini-flash-latest` / model default | thinking: `low`/`high`, or a token budget |
 | `ANTHROPIC_API_KEY` | unset | enables the Claude brain; wins over Gemini when both are set |
 | `VOICED_MODEL` / `VOICED_EFFORT` | `claude-opus-5` / `low` | |
-| `VOICED_BRAIN` | first key present, else `rules` | force `rules`, `gemini` or `claude` |
+| `VOICED_BRAIN` | first key present, else `rules` | force `rules`, `gemini`, `claude`, or `claude-code` (the Claude Code CLI on your Claude login, no API key) |
+| `VOICED_CLAUDE_CODE_MODEL` / `VOICED_CLAUDE_CODE_TIMEOUT_MS` | `sonnet` / `10000` | a turn over the timeout goes to rules |
 | `VOICED_DATA` | `.voiced/` | map store and call log |
 | `VOICED_OPERATOR` / `VOICED_OPERATOR_KEY` | scripted / `vo_demo_local` | operator mode and operator API key |
 | `VOICED_ALLOWED_NUMBERS` | unset | comma-separated business lines real calls may dial |

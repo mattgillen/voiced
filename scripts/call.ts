@@ -14,7 +14,7 @@
 // --kind           pay_bill (default) | reach_human | cancel | reservation
 // --max-amount N   pre-approve a payment up to $N. Without it nothing can be paid: the guard stops and asks.
 // --record         record the call (paused while vault digits are keyed) and open the recording afterwards
-// --brain          rules | gemini | claude (default: the first key in your env)
+// --brain          rules | gemini | claude | claude-code (Claude Code on your Claude login, no API key)
 //
 // Only for business service lines: the script attests that the number is one.
 
@@ -60,7 +60,8 @@ if (!demo) {
 
 // 1. A public URL for Twilio, then the server behind it.
 let publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, '');
-if (!demo && !publicUrl) publicUrl = await openTunnel();
+let tunnelUp: Promise<void> | undefined;
+if (!demo && !publicUrl) ({ url: publicUrl, up: tunnelUp } = await openTunnel());
 if (!existsSync('web/dist/index.html')) spawnSync(process.execPath, ['--import', 'tsx', 'scripts/build-web.ts'], { stdio: 'inherit' });
 const server = spawn(process.execPath, ['--import', 'tsx', 'src/server/index.ts'], {
   env: {
@@ -76,7 +77,12 @@ children.push(server);
 server.stdout!.on('data', (d: Buffer) => process.stdout.write(d.toString().replace(/^(?=.)/gm, '  server │ ')));
 server.on('exit', (code) => code && fail(`the server exited (${code})`));
 await waitFor(`${local}/openapi.json`, 30_000, 'the Voiced server to start');
-if (publicUrl) await waitFor(`${publicUrl}/openapi.json`, 90_000, `${publicUrl} to be reachable (new tunnels take a few seconds)`);
+if (tunnelUp) {
+  console.log('  waiting for Cloudflare to register the tunnel…');
+  await tunnelUp;
+  // Best effort: this Mac's DNS can lag a brand-new hostname (Twilio's resolvers usually don't).
+  if (!(await reachable(`${publicUrl}/openapi.json`, 20_000))) console.log(`  (can't reach ${publicUrl} from here yet; continuing, Twilio usually can)`);
+} else if (publicUrl && !(await reachable(`${publicUrl}/openapi.json`, 60_000))) fail(`${publicUrl} isn't reachable; Twilio needs it`);
 
 // 2. The task. Secrets are typed with hidden input and sent only to the local server's vault.
 let body: Record<string, unknown>;
@@ -155,31 +161,44 @@ async function answer(callId: string, requestId: string, request: Extract<CallEv
   await fetch(`${local}/v1/calls/${callId}/respond`, { method: 'POST', headers: H, body: JSON.stringify({ request_id: requestId, approved, choice }) });
 }
 
-async function openTunnel(): Promise<string> {
+/** A quick tunnel: resolves with its URL once printed; `up` resolves when Cloudflare has registered a connection. */
+async function openTunnel(): Promise<{ url: string; up: Promise<void> }> {
   console.log('Opening a Cloudflare quick tunnel so Twilio can reach Voiced…');
   const tunnel = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', local], { stdio: ['ignore', 'ignore', 'pipe'] });
   children.push(tunnel);
+  tunnel.on('error', () => fail('cloudflared is not installed (brew install cloudflared), or set PUBLIC_URL to a public https URL for this machine.'));
+  let registered: () => void;
+  const up = new Promise<void>((resolve) => (registered = resolve));
+  const upTimer = setTimeout(() => fail('Cloudflare did not register the tunnel within 60s (a VPN or work network may block it; try another network)'), 60_000);
   return new Promise((resolve) => {
-    const timer = setTimeout(() => fail('cloudflared did not print a tunnel URL within 30s'), 30_000);
-    tunnel.on('error', () => fail('cloudflared is not installed (brew install cloudflared), or set PUBLIC_URL to a public https URL for this machine.'));
+    const urlTimer = setTimeout(() => fail('cloudflared did not print a tunnel URL within 30s'), 30_000);
     tunnel.stderr!.on('data', (d: Buffer) => {
-      const m = d.toString().match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+      const text = d.toString();
+      const m = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
       if (m) {
-        clearTimeout(timer);
+        clearTimeout(urlTimer);
         console.log(`  tunnel ${m[0]}`);
-        resolve(m[0]);
+        resolve({ url: m[0], up });
+      }
+      if (/Registered tunnel connection/i.test(text)) {
+        clearTimeout(upTimer);
+        registered();
       }
     });
   });
 }
 
 async function waitFor(url: string, ms: number, what: string) {
+  if (!(await reachable(url, ms))) fail(`timed out waiting for ${what}`);
+}
+
+async function reachable(url: string, ms: number): Promise<boolean> {
   const until = Date.now() + ms;
   while (Date.now() < until) {
-    if (await fetch(url).then((r) => r.ok, () => false)) return;
+    if (await fetch(url, { signal: AbortSignal.timeout(5000) }).then((r) => r.ok, () => false)) return true;
     await new Promise((r) => setTimeout(r, 1000));
   }
-  fail(`timed out waiting for ${what}`);
+  return false;
 }
 
 /** The recording of the call just made: newest call to this number since we started, saved and opened. */
