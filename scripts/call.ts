@@ -16,7 +16,7 @@
 // --name "…"       the account holder (asked if missing)
 // --kind           pay_bill (default) | reach_human | cancel | reservation
 // --max-amount N   pre-approve a payment up to $N. Without it nothing can be paid: the guard stops and asks.
-// --record         record the call (paused while vault digits are keyed) and open the recording afterwards
+// --record         record the call (paused while vault digits are keyed) and save the recording afterwards
 // --brain          rules | gemini | claude | claude-code (Claude Code on your Claude login, no API key)
 //
 // Only for business service lines: the script attests that the number is one.
@@ -279,8 +279,7 @@ async function fetchRecording(since: Date) {
       mkdirSync('.voiced/recordings', { recursive: true });
       const file = `.voiced/recordings/${twCall.sid}.mp3`;
       writeFileSync(file, Buffer.from(await mp3.arrayBuffer()));
-      console.log(`  Recording saved to ${file}`);
-      openInBrowser(file);
+      console.log(`  Recording saved. Listen with: open ${file}`);
       return;
     }
     await new Promise((r) => setTimeout(r, 2000));
