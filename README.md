@@ -17,6 +17,7 @@ Strategy, market and risks are in [docs/PITCH.md](docs/PITCH.md); the human-fall
 npm install
 npm test                    # 43 tests: engine, map, vault, guard, outcomes, operators, dial policy, server, OAuth + MCP, Twilio protocol, brains
 npm run sim bedford         # watch one call in the terminal
+npm run call -- --demo bedford   # the live-call runner on a simulated tree (see Making real calls)
 npm run sim all -- --twice  # every tree, twice: the second run replays the map
 npm run sim hard            # the hard cases: loop → operator, identity check, closures
 npm run eval                # score every tree's outcome (AI / human-assisted / failed) against the expected one
@@ -176,14 +177,25 @@ All of these can go in `.env` (see `.env.example`).
 
 ### Making real calls (Twilio)
 
+Run this on your own machine: Twilio has to reach Voiced over a public https URL, and a cloud sandbox can't accept inbound connections.
+
 1. In the Twilio Console, enable the *Predictive and Generative AI/ML Features Addendum* (ConversationRelay won't run without it).
-2. Set the Twilio env vars and `PUBLIC_URL` (https; Twilio connects to `wss://<host>/twilio/relay`).
-3. Start a call with a custom task. Standard fact keys (`zip`, `account`, `card.number`, `card.exp`, `card.cvv`, `pin`, `member`, …) come with the phrases IVRs use to ask for them, and secret keys go straight to the vault:
-   ```json
-   { "custom": { "to": "+1…", "business": "…", "kind": "pay_bill", "goal": "Pay the current balance",
-       "user": { "name": "…" }, "max_amount": 200, "business_line_attested": true,
-       "facts": { "zip": "…", "account": "…", "card.number": "…", "card.exp": "…", "card.cvv": "…" } } }
+2. Put the Twilio variables in `.env` and install a tunnel: `brew install cloudflared`.
+3. Try the flow on a simulated tree first (no Twilio, no cost): `npm run call -- --demo bedford`.
+4. Then a first real call that can't spend money:
+   ```bash
+   npm run call -- +18005550100 --business "Acme Utilities" \
+     --goal "Hear the current balance and due date, then hang up. Do not make a payment." \
+     --ask account --ask zip --record
    ```
+   The script opens a Cloudflare quick tunnel, starts the server behind it, asks for each `--ask` fact with hidden input (it goes straight to the vault, not your shell history or any model), places the call, opens the live transcript in your browser and prints it in the terminal. Approvals are answered in the terminal. Without `--max-amount` nothing can be paid: the guard stops at any payment step. With `--record`, the recording (paused while vault digits are keyed) is saved to `.voiced/recordings/` and opened when the call ends.
+
+Under the hood that's `POST /v1/calls` with a custom task. Standard fact keys (`zip`, `account`, `card.number`, `card.exp`, `card.cvv`, `pin`, `member`, …) come with the phrases IVRs use to ask for them, and secret keys go straight to the vault:
+```json
+{ "custom": { "to": "+1…", "business": "…", "kind": "pay_bill", "goal": "Pay the current balance",
+    "user": { "name": "…" }, "max_amount": 200, "business_line_attested": true,
+    "facts": { "zip": "…", "account": "…", "card.number": "…", "card.exp": "…", "card.cvv": "…" } } }
+```
 Status: written against Twilio's documented ConversationRelay protocol (`sendDigits`, `text`, `end` + `handoffData`, `<Connect action>`), with signatures checked against Twilio's published test vector. It has not been run on a live account yet, so expect to tune endpointing (`ENDPOINT_MS`) and `hints` on real IVR audio.
 
 ## Hand-mapping phone trees

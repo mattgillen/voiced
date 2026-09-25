@@ -11,6 +11,7 @@ import { OperatorQueue } from '../src/core/operators.js';
 import { attachScriptedOperator } from '../src/sim/operator.js';
 import { formatDuration } from '../src/core/session.js';
 import type { CallEvent } from '../src/core/types.js';
+import { printEvent } from './transcript.js';
 import { simulate } from '../src/sim/run.js';
 import { allScenarios, getScenario, scenarios } from '../src/sim/scenarios/index.js';
 
@@ -27,7 +28,6 @@ const operators = new OperatorQueue();
 attachScriptedOperator(operators);
 
 const ids = which === 'all' ? scenarios.map((s) => s.id) : which === 'hard' ? allScenarios.filter((s) => s.hard).map((s) => s.id) : [which];
-const clock = (t: number) => formatDuration(t).padStart(7);
 
 for (const id of ids) {
   for (let run = 1; run <= (twice ? 2 : 1); run++) {
@@ -36,7 +36,7 @@ for (const id of ids) {
     let replies = 0;
     console.log(`\n━━ ${task.title} · ${task.business} · run ${run} ━━`);
     session.subscribe((e: CallEvent) => {
-      if (!quiet) print(e);
+      if (!quiet) printEvent(e);
       if (e.type === 'user_request') {
         const r = e.request;
         const text = r.kind === 'input' ? inputs[r.factKey ?? ''] : undefined;
@@ -55,39 +55,5 @@ for (const id of ids) {
         (r.result ? `\n  result: ${r.result.kind}${r.result.amount ? ` ${r.result.amount}` : ''}${r.result.confirmation ? ` #${r.result.confirmation}` : ''} (evidence @${formatDuration(r.result.evidence?.t ?? 0)}: “${r.result.evidence?.text ?? ''}”)` : '') +
         (r.failure ? `\n  broke at “${r.failure.step}”: ${r.failure.reason}: ${r.failure.detail}` : ''),
     );
-  }
-}
-
-function print(e: CallEvent) {
-  switch (e.type) {
-    case 'heard':
-      if (e.speaker === 'hold' && e.text.startsWith('♪')) return;
-      console.log(`${clock(e.t)}  ${e.speaker.toUpperCase().padEnd(5)} ${e.text}`);
-      break;
-    case 'action':
-      if (e.action.type === 'wait' && e.source !== 'map') console.log(`${clock(e.t)}  ·     (${e.reason})`);
-      else console.log(`${clock(e.t)}  AGENT ${e.display ? `[${e.action.type}] ${e.display}` : `[${e.action.type}]`}  ← ${e.source}: ${e.reason}`);
-      break;
-    case 'user_request':
-      console.log(`${clock(e.t)}  ⚠︎ ASK ${e.request.title}: ${e.request.detail}`);
-      break;
-    case 'handoff':
-      console.log(`${clock(e.t)}  ⇄ HANDOFF ${e.briefing}`);
-      break;
-    case 'escalated':
-      console.log(`${clock(e.t)}  ⚑ ESCALATED to operator queue (${e.reason} at “${e.step}”): ${e.detail}`);
-      break;
-    case 'operator':
-      console.log(`${clock(e.t)}  ☎ OPERATOR ${e.operator} ${e.state}${e.note ? `: ${e.note}` : ''}`);
-      break;
-    case 'recording':
-      console.log(`${clock(e.t)}  ● recording ${e.paused ? 'paused' : 'resumed'} (${e.reason})`);
-      break;
-    case 'bridge':
-      console.log(`${clock(e.t)}  ${e.from === 'user' ? 'YOU  ' : 'REP  '} ${e.text}`);
-      break;
-    case 'status':
-      if (e.status === 'on_hold') console.log(`${clock(e.t)}  ♪ on hold`);
-      break;
   }
 }

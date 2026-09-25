@@ -4,6 +4,7 @@
   "description": "Voiced: the phone layer for AI agents. Navigates IVR phone trees, pays bills, waits on hold, and hands live humans to the user.",
   "scripts": {
     "sim": "tsx scripts/sim.ts",
+    "call": "tsx scripts/call.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc -p .",
     "dev": "tsx src/server/index.ts",
