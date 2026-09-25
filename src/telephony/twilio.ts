@@ -186,9 +186,11 @@ export class TwilioLine implements Line {
       if (msg.type === 'prompt' && msg.last !== false && typeof msg.voicePrompt === 'string') this.heard(msg.voicePrompt);
       if (msg.type === 'error') console.warn(`[twilio ${this.job}]`, msg.description);
     });
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
       clearTimeout(this.quietTimer);
-      if (!this.handedOff) this.remoteHangup();
+      if (this.ended || this.handedOff) return;
+      console.warn(`[twilio ${this.job}] relay socket closed (${code}${reason.length ? ` ${reason}` : ''}); ending the call`);
+      this.remoteHangup();
     });
   }
 
@@ -277,6 +279,9 @@ export class TwilioLine implements Line {
   remoteHangup() {
     if (this.ended) return;
     this.ended = true;
+    // Whatever ended our side (the socket dropped, Twilio says the session is over), end the phone call
+    // too: otherwise Twilio can keep it up for a while with nobody driving it. A no-op if it's already over.
+    if (this.callSid && !this.handedOff) void this.hub.rest(`/Calls/${this.callSid}.json`, { Status: 'completed' }).catch(() => {});
     this.push({ kind: 'hangup', by: 'remote' });
     this.hub.lines.delete(this.job);
   }

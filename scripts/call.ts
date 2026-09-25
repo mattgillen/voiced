@@ -20,7 +20,7 @@
 
 import '../src/env.js';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import type { CallEvent } from '../src/core/types.js';
 import { printEvent } from './transcript.js';
@@ -49,17 +49,40 @@ function fail(msg: string): never {
 }
 
 function shutdown(code = 0): never {
-  for (const c of children) c.kill('SIGINT');
   process.exit(code);
 }
+// Children run in their own process group (so Ctrl+C reaches only this script, which hangs up first); stop them on the way out.
+process.on('exit', () => {
+  for (const c of children) c.kill('SIGINT');
+});
 process.on('SIGINT', () => void stop(130));
 
+let stopping = false;
 async function stop(code: number) {
+  if (stopping) return; // npm forwards Ctrl+C too
+  stopping = true;
   if (liveCall) {
     console.log('\nHanging up…');
     await fetch(`${local}/v1/calls/${liveCall}/hangup`, { method: 'POST', headers: H, signal: AbortSignal.timeout(5000) }).catch(() => {});
+    if (!demo) await endTwilioCalls();
   }
   shutdown(code);
+}
+
+/** Backstop for Ctrl+C: end any call to this number still up on Twilio, straight through its API. */
+async function endTwilioCalls() {
+  const sid = process.env.TWILIO_ACCOUNT_SID!;
+  const auth = { authorization: `Basic ${Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64')}` };
+  const api = `https://api.twilio.com/2010-04-01/Accounts/${sid}`;
+  for (const status of ['in-progress', 'ringing', 'queued']) {
+    const list = (await fetch(`${api}/Calls.json?To=${encodeURIComponent(to!)}&Status=${status}`, { headers: auth, signal: AbortSignal.timeout(5000) })
+      .then((r) => r.json())
+      .catch(() => ({}))) as { calls?: { sid: string }[] };
+    for (const c of list.calls ?? []) {
+      await fetch(`${api}/Calls/${c.sid}.json`, { method: 'POST', headers: auth, body: new URLSearchParams({ Status: 'completed' }), signal: AbortSignal.timeout(5000) }).catch(() => {});
+      console.log(`  ended ${c.sid} on Twilio`);
+    }
+  }
 }
 
 if (!demo && !to) fail('Give the number to call (E.164, e.g. +18005550100), or --demo bedford to try the flow on a simulated tree.');
@@ -74,6 +97,7 @@ let tunnelUp: Promise<void> | undefined;
 if (!demo && !publicUrl) ({ url: publicUrl, up: tunnelUp } = await openTunnel());
 if (!existsSync('web/dist/index.html')) spawnSync(process.execPath, ['--import', 'tsx', 'scripts/build-web.ts'], { stdio: 'inherit' });
 const server = spawn(process.execPath, ['--import', 'tsx', 'src/server/index.ts'], {
+  detached: true,
   env: {
     ...process.env,
     PORT: String(port),
@@ -176,8 +200,11 @@ async function answer(callId: string, requestId: string, request: Extract<CallEv
 /** A quick tunnel: resolves with its URL once printed; `up` resolves when Cloudflare has registered a connection. */
 async function openTunnel(): Promise<{ url: string; up: Promise<void> }> {
   console.log('Opening a Cloudflare quick tunnel so Twilio can reach Voiced…');
-  const tunnel = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', local], { stdio: ['ignore', 'ignore', 'pipe'] });
+  // HTTP/2 over TCP: QUIC (the default) drops on some home and office networks, and a drop ends the call.
+  const tunnel = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', local], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
   children.push(tunnel);
+  mkdirSync('.voiced', { recursive: true });
+  tunnel.stderr!.pipe(createWriteStream('.voiced/cloudflared.log'));
   tunnel.on('error', () => fail('cloudflared is not installed (brew install cloudflared), or set PUBLIC_URL to a public https URL for this machine.'));
   let registered: () => void;
   const up = new Promise<void>((resolve) => (registered = resolve));

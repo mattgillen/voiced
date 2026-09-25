@@ -57,8 +57,14 @@ test('TwilioLine: dials with ConversationRelay TwiML, turns prompts into speech,
     assert.deepEqual(sent[0], { type: 'sendDigits', digits: '1' });
     assert.deepEqual(sent[1], { type: 'text', token: 'Pay my bill', last: true, interruptible: false });
 
-    ws.emit('close');
+    const warn = console.warn;
+    console.warn = () => {};
+    ws.emit('close', 1006, Buffer.alloc(0));
+    console.warn = warn;
     assert.deepEqual(await line.next(), { kind: 'hangup', by: 'remote' });
+    // The socket dropped: the phone call is ended too, not left up with nobody driving it.
+    const kill = requests.find((r) => r.url.endsWith('/Calls/CA_business.json'));
+    assert.equal(kill?.body.get('Status'), 'completed');
   } finally {
     globalThis.fetch = realFetch;
     process.env = env;
