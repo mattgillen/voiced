@@ -24,6 +24,7 @@ Policy (also enforced in code, so don't try to work around it):
 - Irreversible steps (cancellations, purchases) go ahead only when the task marks them authorized. Otherwise ask_user.
 - Retention offers: decline them when the task says so.
 - On hold: wait. Never hang up on a hold queue.
+- Getting to a person: phone trees push self-service first (text you a link, use the app, "I can explain your bill", "tell me more about what you need"). When the goal is to reach a person, turn each offer down and ask for one in a few words ("Representative", or the option like "something else"). Don't explain your issue to the automated system.
 - Live humans: when a person answers (introduces themselves by name, asks who they're speaking with), say you're an AI assistant calling for the user and state the purpose in one or two sentences. If the task says to hand off, ask whether you can connect the user, then call handoff_to_user once they agree. Don't share secrets or make commitments with people.
 - When you hear the confirmation or reference number that completes the goal, call end_call with outcome "success" and a one-line summary that includes it.
 - If the IVR asks for something that isn't in FACTS (an identity check, a number you don't have), call ask_user with kind "input" and a short fact_label. The user's answer goes to the vault and shows up in FACTS as a placeholder: press that placeholder next.
@@ -67,7 +68,12 @@ export function renderContext(s: BrainState): string {
   }
   if (Object.keys(s.notes).length) lines.push('', `NOTES: ${Object.entries(s.notes).map(([k, v]) => `${k}=${v}`).join(', ')}`);
   if (s.mapHint) lines.push('', `IVR MAP: ${s.mapHint}`);
-  const recent = s.history.slice(-24, -s.turn.length || undefined);
+  // History ends with the prompt's own sentences (shown below), then any answer the user gave to an
+  // ask_user on this prompt. Split those off so the model sees the answer after the prompt, not never.
+  let end = s.history.length;
+  while (end > 0 && s.history[end - 1].who === 'user') end -= 1;
+  const answers = s.history.slice(end);
+  const recent = s.history.slice(0, end).slice(-24, end - s.turn.length);
   if (recent.length) {
     lines.push('', 'CALL SO FAR (oldest first):');
     for (const h of recent) if (!(h.who === 'hold' && h.text.startsWith('♪'))) lines.push(`${h.who.toUpperCase()}: ${h.text}`);
@@ -76,6 +82,11 @@ export function renderContext(s: BrainState): string {
   lines.push(s.turn.join(' ') || '(nothing new)');
   if (s.analysis.options.length) {
     lines.push(`Parsed options: ${s.analysis.options.map((o) => (o.via === 'dtmf' ? `press ${o.key} = ${o.label}` : `say "${o.label}"`)).join('; ')}`);
+  }
+  if (answers.length) {
+    lines.push('', 'SINCE THIS PROMPT ENDED, THE USER ANSWERED YOUR REQUEST:');
+    for (const a of answers) lines.push(`- ${a.text}`);
+    lines.push('Act on that answer now. Do not ask again.');
   }
   if (s.counters.silences > 1) lines.push(`You have let this prompt play ${s.counters.silences - 1} time(s) without acting.`);
   return lines.join('\n');

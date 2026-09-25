@@ -103,3 +103,14 @@ test('input requests for a standard fact use its key, so the answer lands where 
   const other = ask('shipping reference', 'Enter the shipping reference from your receipt.');
   assert.ok(other.type === 'ask_user' && other.request.kind === 'input' && other.request.factKey === 'asked.shipping_reference');
 });
+
+test('after the user answers an ask on this prompt, the context shows the answer after the prompt', () => {
+  const turn = ['A convenience fee of $2.95 will be applied.', 'To authorize this payment, press 1.'];
+  const s = state(turn);
+  s.history = [{ who: 'ivr', text: 'Your current balance is $142.17.' }, ...turn.map((text) => ({ who: 'ivr' as const, text })), { who: 'user', text: 'Approved: Approve the $2.95 fee' }];
+  const ctx = renderContext(s);
+  const [before, after] = ctx.split('JUST SAID');
+  assert.match(before, /IVR: Your current balance is \$142\.17\./);
+  assert.doesNotMatch(before, /convenience fee/, 'the prompt itself is not repeated in the call so far');
+  assert.match(after, /USER ANSWERED YOUR REQUEST:\n- Approved: Approve the \$2\.95 fee\nAct on that answer now/);
+});
