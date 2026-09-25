@@ -77,13 +77,21 @@ const INTENT: Record<TaskKind, string> = {
   reach_human: 'Representative',
 };
 
+/** A number as keypad tones: separators (spaces, dashes, dots, slashes, parentheses) removed when what's left is all digits. */
+export function keypadDigits(value: string): string {
+  const stripped = value.replace(/[\s\-.()/]/g, '');
+  return /^[0-9*#w]+$/.test(stripped) ? stripped : value;
+}
+
 export function buildCustomTask(input: CustomTaskInput): { task: Task; secrets: Record<string, string> } {
   const facts: Fact[] = [];
   const secrets: Record<string, string> = {};
   const add = (key: string, raw: CustomTaskInput['facts'] extends Record<string, infer V> | undefined ? V : never) => {
     const std = STANDARD_FACTS[key];
-    const value = typeof raw === 'string' ? raw : raw.value;
     const secret = (typeof raw === 'string' ? undefined : raw.secret) ?? std?.secret ?? false;
+    // Secret numbers get keyed: drop the separators people copy from a bill ("1234567890-004", "12/28").
+    const typed = (typeof raw === 'string' ? raw : raw.value).trim();
+    const value = secret ? keypadDigits(typed) : typed;
     const label = (typeof raw === 'string' ? undefined : raw.label) ?? std?.label ?? key;
     const aliases = [...((typeof raw === 'string' ? undefined : raw.aliases) ?? []), ...(std?.aliases ?? [label.toLowerCase()])];
     if (secret) {

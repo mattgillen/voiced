@@ -34,6 +34,7 @@ import type {
   UserRequest,
   UserResponse,
 } from './types.js';
+import { keypadDigits } from './tasks.js';
 import { Vault, VaultError } from './vault.js';
 
 export interface SessionOptions {
@@ -356,10 +357,15 @@ export class CallSession {
       case 'press': {
         let digits: string;
         try {
-          digits = vault.resolve(a.digits, { allowSecrets: true });
+          digits = keypadDigits(vault.resolve(a.digits, { allowSecrets: true }));
         } catch (err) {
           if (!(err instanceof VaultError)) throw err;
           emitAction(`(blocked) ${err.message}`);
+          return;
+        }
+        // Twilio rejects the whole entry if any character isn't a key (a letter in an account number, say).
+        if (!/^[0-9*#w]*$/.test(digits)) {
+          emitAction(`(blocked) ${vault.redact(a.digits)} has characters a keypad can't send`);
           return;
         }
         emitAction(vault.redact(a.digits));

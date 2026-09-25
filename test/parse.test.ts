@@ -9,6 +9,7 @@ import {
   parseMenuOptions,
   parseTimes,
 } from '../src/core/parse.js';
+import { buildCustomTask, keypadDigits } from '../src/core/tasks.js';
 import { Vault } from '../src/core/vault.js';
 
 test('parses label-first, key-first and speech menu options', () => {
@@ -73,4 +74,17 @@ test('vault resolves, redacts and scrubs', () => {
   assert.throws(() => v.resolve('{{card.number}}', { allowSecrets: false }));
   assert.equal(v.redact('{{card.number}}# {{zip}}'), 'Visa •• 4242# 13205');
   assert.equal(v.scrub('You entered 4242 4242 4242 4242.'), 'You entered Visa •• 4242.');
+});
+
+test('secret numbers copied from a bill are keyed without separators', () => {
+  assert.equal(keypadDigits('1234567890-004'), '1234567890004');
+  assert.equal(keypadDigits(' 4242 4242 4242 4242 '), '4242424242424242');
+  assert.equal(keypadDigits('12/28'), '1228');
+  assert.equal(keypadDigits('AB-1234'), 'AB-1234', 'letters are left alone (a keypad cannot send them; the session blocks it)');
+  const { task, secrets } = buildCustomTask({
+    to: '+18005550100', business: 'Acme', kind: 'pay_bill', goal: 'Hear the balance', user: { name: 'Pat Lee' },
+    facts: { account: '1234567890-004', zip: '13205' },
+  });
+  assert.equal(secrets.account, '1234567890004');
+  assert.equal(task.facts.find((f) => f.key === 'account')?.display, '•••• 0004');
 });

@@ -40,6 +40,8 @@ const local = `http://localhost:${port}`;
 const API_KEY = process.env.VOICED_API_KEY ?? 'vk_demo_local';
 const H = { authorization: `Bearer ${API_KEY}`, 'content-type': 'application/json' };
 const children: ChildProcess[] = [];
+/** The call in progress, so Ctrl+C hangs it up before the server goes away. */
+let liveCall: string | undefined;
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
@@ -50,7 +52,15 @@ function shutdown(code = 0): never {
   for (const c of children) c.kill('SIGINT');
   process.exit(code);
 }
-process.on('SIGINT', () => shutdown(130));
+process.on('SIGINT', () => void stop(130));
+
+async function stop(code: number) {
+  if (liveCall) {
+    console.log('\nHanging up…');
+    await fetch(`${local}/v1/calls/${liveCall}/hangup`, { method: 'POST', headers: H, signal: AbortSignal.timeout(5000) }).catch(() => {});
+  }
+  shutdown(code);
+}
 
 if (!demo && !to) fail('Give the number to call (E.164, e.g. +18005550100), or --demo bedford to try the flow on a simulated tree.');
 if (!demo) {
@@ -117,10 +127,12 @@ const res = await fetch(`${local}/v1/calls`, { method: 'POST', headers: H, body:
 const call = (await res.json()) as { id?: string; watch_url?: string; error?: string };
 if (!res.ok || !call.id) fail(`the call was not placed: ${call.error ?? res.status}`);
 const watch = call.watch_url!.replace(publicUrl ?? local, local);
-console.log(`\n━━ Calling ${demo ?? to} · live view: ${watch} ━━`);
+liveCall = call.id;
+console.log(`\n━━ Calling ${demo ?? to} · live view: ${watch} · Ctrl+C hangs up ━━`);
 openInBrowser(watch);
 
 const ended = await follow(call.id!);
+liveCall = undefined;
 if (flag('record') && !demo) await fetchRecording(started);
 shutdown(ended ? 0 : 1);
 
@@ -233,6 +245,7 @@ function openInBrowser(target: string) {
 
 async function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  rl.on('SIGINT', () => void stop(130));
   try {
     return (await rl.question(question)).trim();
   } finally {
@@ -251,7 +264,7 @@ function askHidden(question: string): Promise<string> {
     let value = '';
     const onData = (chunk: string) => {
       for (const c of chunk) {
-        if (c === '\u0003') shutdown(130);
+        if (c === '\u0003') void stop(130);
         if (c === '\r' || c === '\n') {
           stdin.off('data', onData);
           stdin.setRawMode(false);
