@@ -73,7 +73,7 @@ const server = spawn(process.execPath, ['--import', 'tsx', 'src/server/index.ts'
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 children.push(server);
-server.stdout!.on('data', (d: Buffer) => process.stdout.write(d.toString().replace(/^/gm, '  server │ ')));
+server.stdout!.on('data', (d: Buffer) => process.stdout.write(d.toString().replace(/^(?=.)/gm, '  server │ ')));
 server.on('exit', (code) => code && fail(`the server exited (${code})`));
 await waitFor(`${local}/openapi.json`, 30_000, 'the Voiced server to start');
 if (publicUrl) await waitFor(`${publicUrl}/openapi.json`, 90_000, `${publicUrl} to be reachable (new tunnels take a few seconds)`);
