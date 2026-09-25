@@ -17,7 +17,14 @@ import { sentences } from '../core/parse.js';
 import type { Line, LineEvent, Task } from '../core/types.js';
 
 /** How long the far end must stay quiet before we treat its prompt as finished. */
-const ENDPOINT_MS = 1400;
+// Twilio reports a prompt once the far end has been quiet for SPEECH_TIMEOUT_MS, so the sentences of one
+// prompt ("Enter your account number." pause "It's on your statement.") arrive together; ENDPOINT_MS more
+// of quiet ends our turn. Live IVRs pause 1-2 s between sentences and ignore keys pressed over a prompt.
+const SPEECH_TIMEOUT_MS = 2000;
+const ENDPOINT_MS = 800;
+/** Before keying or speaking, wait for the far end to stop talking (no partial transcript this long), up to QUIET_MAX_MS. */
+const QUIET_MS = 1000;
+const QUIET_MAX_MS = 8000;
 const API = 'https://api.twilio.com/2010-04-01';
 
 interface TwilioConfig {
@@ -128,6 +135,8 @@ export class TwilioLine implements Line {
   private quietTimer?: NodeJS.Timeout;
   private ended = false;
   private handedOff = false;
+  /** When the last partial transcript arrived: the far end is talking. 0 once the prompt is final. */
+  private speakingAt = 0;
   private connected?: () => void;
   private accepted?: (ok: boolean) => void;
   /** Record the business leg (VOICED_RECORD=1). Recording pauses while vault digits are keyed. */
@@ -154,7 +163,7 @@ export class TwilioLine implements Line {
     const hints = ['representative', 'operator', 'agent', 'billing', 'account number', this.task.business].join(',');
     const twiml =
       `<Response><Connect action="${xml(`${base}/twilio/action?job=${this.job}`)}" method="POST">` +
-      `<ConversationRelay url="${xml(relay)}" transcriptionProvider="Deepgram" speechModel="nova-3-general" ttsProvider="ElevenLabs" language="en-US" interruptible="none" reportInputDuringAgentSpeech="speech" hints="${xml(hints)}">` +
+      `<ConversationRelay url="${xml(relay)}" transcriptionProvider="Deepgram" speechModel="nova-3-general" ttsProvider="ElevenLabs" language="en-US" interruptible="none" reportInputDuringAgentSpeech="speech" speechTimeout="${SPEECH_TIMEOUT_MS}" partialPrompts="true" hints="${xml(hints)}">` +
       `<Parameter name="job" value="${this.job}"/></ConversationRelay></Connect></Response>`;
     const connected = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Twilio never opened the ConversationRelay socket')), 90_000);
@@ -183,7 +192,11 @@ export class TwilioLine implements Line {
       const msg = safeJson(raw.toString());
       if (!msg) return;
       if (msg.type === 'setup') this.connected?.();
-      if (msg.type === 'prompt' && msg.last !== false && typeof msg.voicePrompt === 'string') this.heard(msg.voicePrompt);
+      if (msg.type === 'prompt' && msg.last === false) this.speakingAt = Date.now(); // mid-sentence
+      else if (msg.type === 'prompt' && typeof msg.voicePrompt === 'string') {
+        this.speakingAt = 0;
+        this.heard(msg.voicePrompt);
+      }
       if (msg.type === 'error') console.warn(`[twilio ${this.job}]`, msg.description);
     });
     ws.on('close', (code, reason) => {
@@ -218,13 +231,23 @@ export class TwilioLine implements Line {
 
   async sendDigits(digits: string): Promise<void> {
     clearTimeout(this.quietTimer);
+    await this.untilQuiet();
     this.send({ type: 'sendDigits', digits });
   }
 
   async say(text: string): Promise<void> {
     clearTimeout(this.quietTimer);
+    await this.untilQuiet();
     // Not interruptible: speech-driven IVRs talk over callers and would cut us off.
     this.send({ type: 'text', token: text, last: true, interruptible: false });
+  }
+
+  /** Don't key or talk over the far end: many IVRs throw away digits pressed while a prompt plays. */
+  private async untilQuiet() {
+    const until = Date.now() + QUIET_MAX_MS;
+    while (this.speakingAt && Date.now() - this.speakingAt < QUIET_MS && Date.now() < until && !this.ended) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
   }
 
   /** Warm transfer: ring the user, wait for them to press 1, then move the business leg into their room. */

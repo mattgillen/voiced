@@ -40,6 +40,8 @@ test('TwilioLine: dials with ConversationRelay TwiML, turns prompts into speech,
     const twiml = create.body.get('Twiml')!;
     assert.match(twiml, /<ConversationRelay url="wss:\/\/voiced\.example\.com\/twilio\/relay\?job=/);
     assert.doesNotMatch(twiml, /welcomeGreeting/, 'the agent must not talk first on an IVR call');
+    assert.match(twiml, /speechTimeout="2000"/, 'the sentences of one prompt arrive together');
+    assert.match(twiml, /partialPrompts="true"/, 'partials tell us the far end is mid-sentence');
     assert.match(twiml, /<Connect action="https:\/\/voiced\.example\.com\/twilio\/action\?job=/);
 
     line.connect(ws as unknown as WebSocket);
@@ -56,6 +58,18 @@ test('TwilioLine: dials with ConversationRelay TwiML, turns prompts into speech,
     await line.say('Pay my bill');
     assert.deepEqual(sent[0], { type: 'sendDigits', digits: '1' });
     assert.deepEqual(sent[1], { type: 'text', token: 'Pay my bill', last: true, interruptible: false });
+
+    // Mid-sentence (a partial transcript just arrived): keys wait until the far end stops talking.
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'prompt', voicePrompt: 'Your account number can be', last: false })));
+    const t0 = Date.now();
+    const keyed = line.sendDigits('2');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(sent.length, 2, 'nothing keyed over the prompt');
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'prompt', voicePrompt: 'Your account number can be found on your statement.', last: true })));
+    await keyed;
+    assert.deepEqual(sent[2], { type: 'sendDigits', digits: '2' });
+    assert.ok(Date.now() - t0 < 1000, 'the final prompt releases it at once');
+    assert.equal((await line.next()).kind, 'speech', 'only the final prompt becomes heard speech');
 
     const warn = console.warn;
     console.warn = () => {};

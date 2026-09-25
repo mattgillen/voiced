@@ -198,7 +198,7 @@ Under the hood that's `POST /v1/calls` with a custom task. Standard fact keys (`
     "user": { "name": "…" }, "max_amount": 200, "business_line_attested": true,
     "facts": { "zip": "…", "account": "…", "card.number": "…", "card.exp": "…", "card.cvv": "…" } } }
 ```
-Status: written against Twilio's documented ConversationRelay protocol (`sendDigits`, `text`, `end` + `handoffData`, `<Connect action>`), with signatures checked against Twilio's published test vector. It has not been run on a live account yet, so expect to tune endpointing (`ENDPOINT_MS`) and `hints` on real IVR audio.
+Status: written against Twilio's documented ConversationRelay protocol (`sendDigits`, `text`, `end` + `handoffData`, `<Connect action>`), with signatures checked against Twilio's published test vector. First live calls (a city pay-by-phone line) worked end to end: dialing, transcription, DTMF, recording pause/resume. They also showed that IVRs pause 1–2 s between the sentences of one prompt and ignore digits keyed over it, so the line waits for 2 s of quiet before reporting a prompt (`speechTimeout`), and never keys or speaks while partial transcripts show the far end is mid-sentence. Expect more tuning (`SPEECH_TIMEOUT_MS`, `ENDPOINT_MS`, `hints`) as more trees are called.
 
 ## Hand-mapping phone trees
 
